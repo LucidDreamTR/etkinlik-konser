@@ -1,13 +1,17 @@
 // lib/site.ts
-export function getSiteUrl() {
-  const url =
-    process.env.NEXT_PUBLIC_SITE_URL?.trim() ||
-    process.env.SITE_URL?.trim() ||
-    "http://localhost:3000";
+export function getMetadataBase(): URL {
+  // 1) Manuel tanımladığın domain (tercih)
+  const explicit = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (explicit) return new URL(explicit);
 
-  return url.endsWith("/") ? url.slice(0, -1) : url;
-}
+  // 2) Vercel prod domain (varsa)
+  const prodUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  if (prodUrl) return new URL(`https://${prodUrl}`);
 
-export function getMetadataBase() {
-  return new URL(getSiteUrl());
+  // 3) Vercel deployment domain (her deploy’da olur)
+  const vercelUrl = process.env.VERCEL_URL?.trim();
+  if (vercelUrl) return new URL(`https://${vercelUrl}`);
+
+  // 4) Lokal fallback
+  return new URL("http://localhost:3000");
 }
