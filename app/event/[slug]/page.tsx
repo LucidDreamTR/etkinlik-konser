@@ -17,7 +17,6 @@ export async function generateMetadata({
   }
 
   return {
-    metadataBase: new URL("http://localhost:3000"),
     title: `${event.title} | etkinlik.eth`,
     description: `${event.location} · ${event.date} tarihinde gerçekleşecek etkinlik.`,
     openGraph: {
