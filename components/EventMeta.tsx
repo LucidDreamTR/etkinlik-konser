@@ -8,12 +8,13 @@ type EventMetaProps = {
 
 function StatusPill({ status }: { status: NonNullable<EventMetaProps["status"]> }) {
   const map = {
-    upcoming: { label: "Yakında", cls: "border-white/10 bg-white/10 text-white/70" },
-    live: { label: "Canlı", cls: "border-white/15 bg-white/15 text-white" },
-    soldout: { label: "Tükendi", cls: "border-white/10 bg-white/5 text-white/60" },
-  } as const;
+  upcoming: { label: "Yakında", cls: "border-white/10 bg-white/10 text-white/70" },
+  live: { label: "Canlı", cls: "border-white/15 bg-white/15 text-white" },
+  ended: { label: "Bitti", cls: "border-white/10 bg-black/20 text-white/60" },
+  soldout: { label: "Tükendi", cls: "border-white/10 bg-black/20 text-white/60" },
+} as const;
 
-  const s = map[status];
+const s = map[status ?? "upcoming"];
 
   return (
     <span
