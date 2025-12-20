@@ -3,7 +3,7 @@ type EventMetaProps = {
   organizerName: string;
   organizerHandle?: string; // örn: "@konser.eth"
   tags?: string[];
-  status?: "upcoming" | "live" | "soldout";
+  status?: "upcoming" | "live" | "ended" | "soldout";
 };
 
 function StatusPill({ status }: { status: NonNullable<EventMetaProps["status"]> }) {
