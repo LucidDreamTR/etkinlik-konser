@@ -1,6 +1,25 @@
 import EventHero from "@/components/EventHero";
 import EventInfo from "@/components/EventInfo";
 import EventMeta from "@/components/EventMeta";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Rock Gecesi · etkinlik.eth",
+  description:
+    "Rock Gecesi — İstanbul’da yüksek enerjili canlı performans. TL ile ödeme, ENS doğrulama ve Web3 altyapı.",
+  openGraph: {
+    title: "Rock Gecesi · etkinlik.eth",
+    description:
+      "Rock Gecesi — İstanbul’da yüksek enerjili canlı performans. TL ile ödeme, ENS doğrulama ve Web3 altyapı.",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Rock Gecesi · etkinlik.eth",
+    description:
+      "Rock Gecesi — İstanbul’da yüksek enerjili canlı performans. TL ile ödeme, ENS doğrulama ve Web3 altyapı.",
+  },
+};
 
 export default function EventPage() {
   return (
