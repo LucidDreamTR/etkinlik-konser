@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { events } from "../events.mock";
+import { EVENTS } from "@/lib/events";
 
 export const metadata: Metadata = {
   title: "Etkinlikler | etkinlik.eth",
@@ -33,13 +33,13 @@ export default function EventsPage() {
       <h1>Etkinlikler</h1>
 
       <ul>
-        {events.map((event) => (
-          <li key={event.slug}>
-            <a href={`/event/${event.slug}`}>
-              {event.title} — {event.location}
-            </a>
-          </li>
-        ))}
+       {EVENTS.map((event) => (
+  <li key={event.slug}>
+    <a href={`/event/${event.slug}`}>
+      {event.title} — {event.cityLabel} · {event.dateLabel}
+    </a>
+  </li>
+))}
       </ul>
     </div>
   );

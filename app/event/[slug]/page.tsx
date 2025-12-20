@@ -1,64 +1,85 @@
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+
 import EventHero from "@/components/EventHero";
 import EventInfo from "@/components/EventInfo";
 import EventMeta from "@/components/EventMeta";
-import type { Metadata } from "next";
+import { getEventBySlug } from "@/lib/events";
 
-export const metadata: Metadata = {
-  title: "Rock Gecesi · etkinlik.eth",
-  description:
-    "Rock Gecesi — İstanbul’da yüksek enerjili canlı performans. TL ile ödeme, ENS doğrulama ve Web3 altyapı.",
-  openGraph: {
-    title: "Rock Gecesi · etkinlik.eth",
-    description:
-      "Rock Gecesi — İstanbul’da yüksek enerjili canlı performans. TL ile ödeme, ENS doğrulama ve Web3 altyapı.",
-    type: "website",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Rock Gecesi · etkinlik.eth",
-    description:
-      "Rock Gecesi — İstanbul’da yüksek enerjili canlı performans. TL ile ödeme, ENS doğrulama ve Web3 altyapı.",
-  },
-};
+type PageProps = { params: Promise<{ slug: string }> };
 
-export default function EventPage() {
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { slug } = await params;
+  const event = getEventBySlug(slug);
+
+  if (!event) {
+    return {
+      title: "Etkinlik bulunamadı · etkinlik.eth",
+      description: "Aradığınız etkinlik bulunamadı.",
+    };
+  }
+
+  const title = `${event.title} · etkinlik.eth`;
+  const description = `${event.title} — ${event.cityLabel}. TL ile ödeme, ENS doğrulama ve Web3 altyapı.`;
+
+  return {
+    title,
+    description,
+    openGraph: {
+      title,
+      description,
+      type: "website",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+    },
+  };
+}
+
+export default async function EventPage({ params }: PageProps) {
+  const { slug } = await params;
+  const event = getEventBySlug(slug);
+  if (!event) return notFound();
   return (
     <main className="min-h-screen bg-black">
       <div className="pointer-events-none fixed inset-0 -z-10">
         <div className="absolute left-1/2 top-[-220px] h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-white/10 blur-3xl" />
         <div className="absolute right-[-180px] top-[120px] h-[520px] w-[520px] rounded-full bg-white/5 blur-3xl" />
         <div className="absolute bottom-[-260px] left-[-200px] h-[620px] w-[620px] rounded-full bg-white/5 blur-3xl" />
-          <div className="absolute inset-0 opacity-[0.06] mix-blend-overlay [background-image:radial-gradient(circle_at_1px_1px,white_1px,transparent_0)] [background-size:16px_16px]" />
+        <div className="absolute inset-0 opacity-[0.06] mix-blend-overlay [background-image:radial-gradient(circle_at_1px_1px,white_1px,transparent_0)] [background-size:16px_16px]" />
       </div>
 
       <div className="mx-auto max-w-6xl px-5 py-10 sm:px-8 sm:py-14">
         <div className="divide-y divide-white/10 rounded-3xl">
           <div className="py-10 lg:py-12">
-            <EventHero
-              title="Rock Gecesi"
-              dateLabel="12 Nisan 2025 · Cumartesi"
-              cityLabel="İstanbul"
-              ctaLabel="Yakında"
-            />
+           <EventHero
+  title={event.title}
+  dateLabel={event.dateLabel}
+  cityLabel={event.cityLabel}
+  ctaLabel="Yakında"
+  coverImageSrc={event.coverImageSrc}
+/>
           </div>
 
           <div className="py-10 lg:py-12">
             <EventInfo
-              description="Rock Gecesi, yüksek enerjili canlı performanslarla geceyi dev bir sahne deneyimine dönüştürür. Kapasite sınırlı."
-              venueName="Blind İstanbul"
-              venueAddress="Asmalımescit, Beyoğlu"
-              doorsOpenLabel="20:00"
-              startTimeLabel="21:00"
-            />
+  description={event.description}
+  venueName={event.venueName}
+  venueAddress={event.venueAddress}
+  doorsOpenLabel={event.doorsOpenLabel}
+  startTimeLabel={event.startTimeLabel}
+/>
           </div>
 
           <div className="py-10 lg:py-12">
-            <EventMeta
-              organizerName="konser.eth"
-              organizerHandle="@konser.eth"
-              status="upcoming"
-              tags={["Rock", "Live", "Beyoğlu"]}
-            />
+           <EventMeta
+  organizerName={event.organizerName}
+  organizerHandle={event.organizerHandle}
+  status={event.status}
+  tags={event.tags}
+/>
           </div>
         </div>
         <footer className="mt-10 border-t border-white/10 pt-8 text-xs text-white/50">
