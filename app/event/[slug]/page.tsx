@@ -16,24 +16,32 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     return {
       title: "Etkinlik bulunamadı · etkinlik.eth",
       description: "Aradığınız etkinlik bulunamadı.",
+      robots: { index: false, follow: false },
     };
   }
 
   const title = `${event.title} · etkinlik.eth`;
   const description = `${event.title} — ${event.cityLabel}. TL ile ödeme, ENS doğrulama ve Web3 altyapı.`;
 
+  const canonical = `/event/${event.slug}`;
+  const ogImage = `https://etkinlik-konser.vercel.app/og/${event.slug}.png`;
+
   return {
     title,
     description,
+    alternates: { canonical },
     openGraph: {
       title,
       description,
       type: "website",
+      url: canonical,
+      images: [{ url: ogImage, width: 1200, height: 630, alt: event.title }],
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
+      images: [ogImage],
     },
   };
 }
@@ -42,6 +50,7 @@ export default async function EventPage({ params }: PageProps) {
   const { slug } = await params;
   const event = getEventBySlug(slug);
   if (!event) return notFound();
+
   return (
     <main className="min-h-screen bg-black">
       <div className="pointer-events-none fixed inset-0 -z-10">
@@ -54,40 +63,41 @@ export default async function EventPage({ params }: PageProps) {
       <div className="mx-auto max-w-6xl px-5 py-10 sm:px-8 sm:py-14">
         <div className="divide-y divide-white/10 rounded-3xl">
           <div className="py-10 lg:py-12">
-           <EventHero
-  title={event.title}
-  dateLabel={event.dateLabel}
-  cityLabel={event.cityLabel}
-  ctaLabel="Yakında"
-  coverImageSrc={event.coverImageSrc}
-/>
+            <EventHero
+              title={event.title}
+              dateLabel={event.dateLabel}
+              cityLabel={event.cityLabel}
+              ctaLabel="Yakında"
+              coverImageSrc={event.coverImageSrc}
+            />
           </div>
 
           <div className="py-10 lg:py-12">
             <EventInfo
-  description={event.description}
-  venueName={event.venueName}
-  venueAddress={event.venueAddress}
-  doorsOpenLabel={event.doorsOpenLabel}
-  startTimeLabel={event.startTimeLabel}
-/>
+              description={event.description}
+              venueName={event.venueName}
+              venueAddress={event.venueAddress}
+              doorsOpenLabel={event.doorsOpenLabel}
+              startTimeLabel={event.startTimeLabel}
+            />
           </div>
 
           <div className="py-10 lg:py-12">
-           <EventMeta
-  organizerName={event.organizerName}
-  organizerHandle={event.organizerHandle}
-  status={event.status}
-  tags={event.tags}
-/>
+            <EventMeta
+              organizerName={event.organizerName}
+              organizerHandle={event.organizerHandle}
+              status={event.status}
+              tags={event.tags}
+            />
           </div>
         </div>
+
         <footer className="mt-10 border-t border-white/10 pt-8 text-xs text-white/50">
-  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-    <span>etkinlik.eth · konser.eth</span>
-    <span>TL ödeme · ENS doğrulama · Web3 altyapı</span>
-  </div>
-</footer>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <span>etkinlik.eth · konser.eth</span>
+            <span>TL ödeme · ENS doğrulama · Web3 altyapı</span>
+          </div>
+        </footer>
       </div>
     </main>
   );
