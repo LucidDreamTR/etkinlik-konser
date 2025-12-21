@@ -10,7 +10,9 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const event = getEventBySlug(slug);
+  const normalizedSlug = decodeURIComponent(slug).trim();
+
+  const event = getEventBySlug(normalizedSlug);
 
   if (!event) {
     return {
@@ -23,8 +25,9 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const title = `${event.title} · etkinlik.eth`;
   const description = `${event.title} — ${event.cityLabel}. TL ile ödeme, ENS doğrulama ve Web3 altyapı.`;
 
-  const canonical = `/event/${event.slug}`;
-  const ogImage = `https://etkinlik-konser.vercel.app/og/${event.slug}.png`;
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  const canonical = `${baseUrl}/event/${event.slug}`;
+  const ogImage = `${baseUrl}/event/${event.slug}/opengraph-image`;
 
   return {
     title,
@@ -48,7 +51,9 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
 export default async function EventPage({ params }: PageProps) {
   const { slug } = await params;
-  const event = getEventBySlug(slug);
+  const normalizedSlug = decodeURIComponent(slug).trim();
+
+  const event = getEventBySlug(normalizedSlug);
   if (!event) return notFound();
 
   return (
