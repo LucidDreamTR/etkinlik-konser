@@ -1,4 +1,7 @@
-export const dynamic = "force-dynamic";
+// app/events/page.tsx
+
+export const dynamic = "force-static";
+export const revalidate = 300;
 
 import type { Metadata } from "next";
 import Link from "next/link";
