@@ -2,20 +2,29 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { events } from "@/app/events.mock";
 
-const ogImage = "https://etkinlik-konser.vercel.app/og/events.png";
+const ogImage = "/events/opengraph-image";
 
 export const metadata: Metadata = {
   title: "Etkinlikler · etkinlik.eth",
   description:
     "Yaklaşan konser ve etkinlikleri keşfet. TL ile ödeme, ENS doğrulama ve Web3 altyapı ile premium deneyim.",
-  alternates: { canonical: "https://etkinlik-konser.vercel.app/events" },
+  alternates: {
+    canonical: "/events",
+  },
   openGraph: {
+    type: "website",
+    url: "/events",
     title: "Etkinlikler · etkinlik.eth",
     description:
       "Yaklaşan konser ve etkinlikleri keşfet. TL ile ödeme, ENS doğrulama ve Web3 altyapı ile premium deneyim.",
-    type: "website",
-    url: "https://etkinlik-konser.vercel.app/events",
-    images: [{ url: ogImage, width: 1200, height: 630 }],
+    images: [
+      {
+        url: ogImage,
+        width: 1200,
+        height: 630,
+        alt: "Etkinlikler · etkinlik.eth",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
@@ -23,6 +32,10 @@ export const metadata: Metadata = {
     description:
       "Yaklaşan konser ve etkinlikleri keşfet. TL ile ödeme, ENS doğrulama ve Web3 altyapı ile premium deneyim.",
     images: [ogImage],
+  },
+  robots: {
+    index: true,
+    follow: true,
   },
 };
 
