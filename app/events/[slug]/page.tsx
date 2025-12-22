@@ -5,14 +5,45 @@ export const revalidate = 300;
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { events } from "@/app/events.mock";
 
-type PageProps = {
-  params: { slug: string };
+type Event = {
+  slug: string;
+  title: string;
+  description: string;
+  date: string;
+  location: string;
 };
 
-export default function EventPage({ params }: PageProps) {
-  const event = events.find((e) => e.slug === params.slug);
+// 🔒 Güvenli mock getter (ileride API/DB olacak)
+async function getEvent(slug: string): Promise<Event | null> {
+  const events: Event[] = [
+    {
+      slug: "rock-gecesi",
+      title: "Rock Gecesi",
+      description:
+        "Gecenin headliner’ları ve sürpriz konuklarla premium rock deneyimi.",
+      date: "12 Nisan 2025",
+      location: "İstanbul",
+    },
+    {
+      slug: "elektronik-gece",
+      title: "Elektronik Gece",
+      description:
+        "Analog synth’ler, deep bass ve görsel şovla elektronik gece.",
+      date: "3 Mayıs 2025",
+      location: "Ankara",
+    },
+  ];
+
+  return events.find((e) => e.slug === slug) ?? null;
+}
+
+export default async function EventPage({
+  params,
+}: {
+  params: { slug: string };
+}) {
+  const event = await getEvent(params.slug);
   if (!event) return notFound();
 
   return (
