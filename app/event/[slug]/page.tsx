@@ -1,6 +1,7 @@
 // app/event/[slug]/page.tsx
 
 export const dynamic = "force-static";
+export const dynamicParams = true; // ✅ fallback: prebuild yoksa ilk istekte ISR üret
 export const revalidate = 300;
 
 import type { Metadata } from "next";
@@ -40,14 +41,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       url: `/event/${e.slug}`,
       title: `${e.title} · etkinlik.eth`,
       description: e.description,
-      images: [
-        {
-          url: ogImage,
-          width: 1200,
-          height: 630,
-          alt: `${e.title} · etkinlik.eth`,
-        },
-      ],
+      images: [{ url: ogImage, width: 1200, height: 630, alt: `${e.title} · etkinlik.eth` }],
     },
     twitter: {
       card: "summary_large_image",
@@ -93,9 +87,7 @@ export default function EventPage({ params }: PageProps) {
             {e.title}
           </h1>
 
-          <p className="max-w-3xl text-pretty text-white/60">
-            {e.description}
-          </p>
+          <p className="max-w-3xl text-pretty text-white/60">{e.description}</p>
         </header>
 
         <section className="grid gap-4 lg:grid-cols-12">
@@ -117,24 +109,19 @@ export default function EventPage({ params }: PageProps) {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                     <div className="text-xs text-white/50">Tarih</div>
-                    <div className="mt-1 text-sm font-medium text-white/85">
-                      {e.date}
-                    </div>
+                    <div className="mt-1 text-sm font-medium text-white/85">{e.date}</div>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                     <div className="text-xs text-white/50">Konum</div>
-                    <div className="mt-1 text-sm font-medium text-white/85">
-                      {e.location}
-                    </div>
+                    <div className="mt-1 text-sm font-medium text-white/85">{e.location}</div>
                   </div>
                 </div>
 
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs text-white/50">Detay</div>
                   <div className="mt-2 text-sm leading-relaxed text-white/70">
-                    Biletleme, giriş doğrulama ve paydaş ödemeleri akıllı kontrat
-                    dağıtımı ile kurgulanır. Bu sayfa premium vitrin olarak statik/ISR
-                    servis edilir.
+                    Biletleme, giriş doğrulama ve paydaş ödemeleri akıllı kontrat dağıtımı ile kurgulanır.
+                    Bu sayfa premium vitrin olarak statik/ISR servis edilir.
                   </div>
                 </div>
               </div>
@@ -146,12 +133,8 @@ export default function EventPage({ params }: PageProps) {
               <div className="flex flex-col gap-4">
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-xs text-white/50">Bilet</div>
-                  <div className="mt-1 text-sm font-medium text-white/85">
-                    Yakında
-                  </div>
-                  <div className="mt-2 text-xs text-white/50">
-                    (Mock akış — sonraki adımda gerçek checkout)
-                  </div>
+                  <div className="mt-1 text-sm font-medium text-white/85">Yakında</div>
+                  <div className="mt-2 text-xs text-white/50">(Mock akış — sonraki adımda gerçek checkout)</div>
                 </div>
 
                 <button
@@ -161,9 +144,7 @@ export default function EventPage({ params }: PageProps) {
                   Bilet Al (Yakında)
                 </button>
 
-                <div className="text-xs text-white/50">
-                  etkinlik.eth · konser.eth
-                </div>
+                <div className="text-xs text-white/50">etkinlik.eth · konser.eth</div>
               </div>
             </div>
           </aside>
