@@ -71,9 +71,9 @@ export default function EventsPage() {
             >
               <div className="flex flex-col gap-3">
                 <div className="inline-flex w-fit items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs text-white/70">
-                  <span>{e.dateLabel}</span>
+                  <span>{e.date}</span>
                   <span className="text-white/30">•</span>
-                  <span>{e.cityLabel}</span>
+                  <span>{e.location}</span>
                 </div>
 
                 <h2 className="text-xl font-semibold tracking-tight text-white">
@@ -81,7 +81,7 @@ export default function EventsPage() {
                 </h2>
 
                 <p className="text-sm leading-relaxed text-white/60 line-clamp-3">
-                  {e.description}
+                  {("description" in e ? (e as any).description : "")}
                 </p>
 
                 <div className="mt-2 inline-flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-white/70 transition group-hover:bg-white/10">
