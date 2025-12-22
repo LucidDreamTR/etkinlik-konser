@@ -1,8 +1,8 @@
 // app/event/[slug]/page.tsx
 
-export const dynamic = "force-static";
+export const dynamic = "auto";
 export const dynamicParams = true; // ✅ fallback: prebuild yoksa ilk istekte ISR üret
-export const revalidate = 1;
+export const revalidate = 300;
 
 import type { Metadata } from "next";
 import Link from "next/link";
