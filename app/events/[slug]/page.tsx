@@ -44,7 +44,21 @@ export default async function EventPage({
   params: { slug: string };
 }) {
   const event = await getEvent(params.slug);
-  if (!event) return notFound();
+  if (!event) {
+  return (
+    <main className="min-h-screen bg-black text-white">
+      <div className="mx-auto max-w-3xl px-6 py-16">
+        <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
+          <div className="text-sm text-white/60">DEBUG</div>
+          <div className="mt-2 text-xl font-semibold">Event bulunamadı</div>
+          <div className="mt-4 text-sm text-white/60">
+            params.slug: <span className="text-white">{JSON.stringify(params.slug)}</span>
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
 
   return (
     <main className="min-h-screen bg-black text-white">
