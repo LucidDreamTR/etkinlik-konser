@@ -1,6 +1,6 @@
 // app/event/[slug]/page.tsx
 
-export const dynamic = "auto";
+export const dynamic = "force-dynamic";
 export const dynamicParams = true; // ✅ fallback: prebuild yoksa ilk istekte ISR üret
 export const revalidate = 300;
 
