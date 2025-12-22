@@ -1,6 +1,6 @@
 // app/events/page.tsx
 
-export const dynamic = "force-static";
+export const dynamic = "auto";
 export const revalidate = 300;
 
 import Link from "next/link";
