@@ -9,6 +9,7 @@ import { notFound } from "next/navigation";
 import { events } from "@/app/events.mock";
 import { resolveRecipient } from "@/lib/address";
 import { buildPayoutParams, computeAmountsWei } from "@/lib/payouts";
+import { encodeDistributeCalldata } from "@/lib/tx";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
@@ -48,6 +49,8 @@ export default async function EventPage({ params }: PageProps) {
   let contractParamsPreview: Record<string, unknown> | null = null;
   let amountsPreview: ReturnType<typeof computeAmountsWei> | null = null;
   let amountsError: string | null = null;
+  let transactionPayload: { to: string; value: string; data: string } | null = null;
+  let transactionWarning: string | null = null;
 
   try {
     contractParams = await buildPayoutParams(event.payouts);
@@ -66,6 +69,24 @@ export default async function EventPage({ params }: PageProps) {
       amountsPreview = computeAmountsWei(contractParams, totalAmountWei);
     } catch (e) {
       amountsError = e instanceof Error ? e.message : "Unknown error";
+    }
+  }
+
+  if (amountsPreview) {
+    const payoutContract = process.env.PAYOUT_CONTRACT_ADDRESS;
+    if (!payoutContract) {
+      transactionWarning = "Missing PAYOUT_CONTRACT_ADDRESS";
+    } else {
+      const data = encodeDistributeCalldata({
+        recipients: amountsPreview.recipients,
+        amountsWei: amountsPreview.amountsWei,
+      });
+
+      transactionPayload = {
+        to: payoutContract,
+        value: amountsPreview.totalAmountWei.toString(),
+        data,
+      };
     }
   }
 
@@ -154,42 +175,73 @@ export default async function EventPage({ params }: PageProps) {
         ) : null}
 
         {amountsPreview ? (
-          <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Amounts (Preview)</h2>
-              <span className="text-sm text-white/60">
-                Total Wei: {amountsPreview.totalAmountWei.toString()}
-              </span>
-            </div>
-            <div className="mt-4 overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="text-left text-white/50">
-                  <tr>
-                    <th className="py-2">Recipient</th>
-                    <th className="py-2 text-right">Share (bps)</th>
-                    <th className="py-2 text-right">Amount (wei)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/10">
-                  {amountsPreview.recipients.map((recipient, idx) => (
-                    <tr key={`${recipient}-${idx}`}>
-                      <td className="py-3 text-white/80">{recipient}</td>
-                      <td className="py-3 text-right text-white/80">{amountsPreview.sharesBps[idx].toString()}</td>
-                      <td className="py-3 text-right text-emerald-300">{amountsPreview.amountsWei[idx].toString()}</td>
+          <>
+            <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold">Amounts (Preview)</h2>
+                <span className="text-sm text-white/60">
+                  Total Wei: {amountsPreview.totalAmountWei.toString()}
+                </span>
+              </div>
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-white/50">
+                    <tr>
+                      <th className="py-2">Recipient</th>
+                      <th className="py-2 text-right">Share (bps)</th>
+                      <th className="py-2 text-right">Amount (wei)</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {amountsPreview.recipients.map((recipient, idx) => (
+                      <tr key={`${recipient}-${idx}`}>
+                        <td className="py-3 text-white/80">{recipient}</td>
+                        <td className="py-3 text-right text-white/80">{amountsPreview.sharesBps[idx].toString()}</td>
+                        <td className="py-3 text-right text-emerald-300">
+                          {amountsPreview.amountsWei[idx].toString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-4 text-sm text-white/70">
+                Dağıtılan: {amountsPreview.distributedWei.toString()} wei · Kalan (remainder):{" "}
+                {amountsPreview.remainderWei.toString()} wei
+              </div>
+              <div className="text-sm text-white/70">
+                Raw remainder: {amountsPreview.rawRemainderWei.toString()} wei · Applied to:{" "}
+                {amountsPreview.remainderAppliedTo}
+              </div>
             </div>
-            <div className="mt-4 text-sm text-white/70">
-              Dağıtılan: {amountsPreview.distributedWei.toString()} wei · Kalan (remainder):{" "}
-              {amountsPreview.remainderWei.toString()} wei
-            </div>
-            <div className="text-sm text-white/70">
-              Raw remainder: {amountsPreview.rawRemainderWei.toString()} wei · Applied to:{" "}
-              {amountsPreview.remainderAppliedTo}
-            </div>
-          </div>
+
+            {transactionPayload ? (
+              <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-6">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold">Transaction Payload (Preview)</h2>
+                  <span className="text-sm text-white/60">payable distribute</span>
+                </div>
+                <div className="mt-4 space-y-3 text-sm text-white/80">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-white/60">to</span>
+                    <span className="font-mono text-emerald-300">{transactionPayload.to}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-white/60">value</span>
+                    <span className="font-mono">{transactionPayload.value}</span>
+                  </div>
+                  <div>
+                    <div className="text-white/60">data</div>
+                    <pre className="mt-1 overflow-x-auto rounded-2xl bg-black/40 p-3 text-[11px] text-emerald-300">{transactionPayload.data}</pre>
+                  </div>
+                </div>
+              </div>
+            ) : transactionWarning ? (
+              <div className="mt-4 rounded-3xl border border-amber-400/60 bg-amber-500/10 p-4 text-sm text-amber-200">
+                {transactionWarning}
+              </div>
+            ) : null}
+          </>
         ) : event.ticketPriceWei && amountsError ? (
           <div className="mt-6 rounded-3xl border border-amber-400/60 bg-amber-500/10 p-4 text-sm text-amber-200">
             Amounts error: {amountsError}
