@@ -9,6 +9,8 @@ export type BuiltPayoutParams = {
   recipients: Address[];
   sharesBps: bigint[];
   totalBps: number;
+  mergedFrom?: number;
+  mergedTo?: number;
 };
 
 export async function buildPayoutParams(payouts: PayoutSplit[]): Promise<BuiltPayoutParams> {
@@ -21,13 +23,24 @@ export async function buildPayoutParams(payouts: PayoutSplit[]): Promise<BuiltPa
     }),
   );
 
-  const totalBps = resolved.reduce((s, p) => s + p.shareBps, 0);
-  if (totalBps !== 10000) throw new Error(`Total bps must be 10000, got ${totalBps}`);
+  const merged = resolved.reduce<Record<string, number>>((acc, p) => {
+    const checksum = p.address;
+    acc[checksum] = (acc[checksum] ?? 0) + p.shareBps;
+    return acc;
+  }, {});
+
+  const recipients = Object.keys(merged) as Address[];
+  const sharesBps = recipients.map((r) => BigInt(merged[r]));
+  const totalBps = sharesBps.reduce((s, b) => s + b, 0n);
+
+  if (totalBps !== 10000n) throw new Error(`Total bps must be 10000, got ${totalBps}`);
 
   return {
-    recipients: resolved.map((p) => p.address),
-    sharesBps: resolved.map((p) => BigInt(p.shareBps)),
-    totalBps,
+    recipients,
+    sharesBps,
+    totalBps: Number(totalBps),
+    mergedFrom: resolved.length,
+    mergedTo: recipients.length,
   };
 }
 
@@ -39,20 +52,36 @@ export type BuiltAmounts = {
   totalAmountWei: bigint;
   distributedWei: bigint;
   remainderWei: bigint; // total - distributed
+  rawRemainderWei: bigint;
+  remainderAppliedTo: Address;
 };
 
-export function computeAmountsWei(params: BuiltPayoutParams, totalAmountWei: bigint): BuiltAmounts {
+export function computeAmountsWei(
+  params: BuiltPayoutParams,
+  totalAmountWei: bigint,
+  remainderToIndex?: number,
+): BuiltAmounts {
   const amountsWei = params.sharesBps.map((bps) => (totalAmountWei * bps) / 10000n);
   const distributedWei = amountsWei.reduce((a, b) => a + b, 0n);
-  const remainderWei = totalAmountWei - distributedWei;
+  const rawRemainderWei = totalAmountWei - distributedWei;
+
+  if (rawRemainderWei > 0n) {
+    const targetIndex = remainderToIndex ?? 0;
+    amountsWei[targetIndex] = amountsWei[targetIndex] + rawRemainderWei;
+  }
+
+  const redistributed = amountsWei.reduce((a, b) => a + b, 0n);
+  const remainderWei = totalAmountWei - redistributed;
 
   return {
     recipients: params.recipients,
     sharesBps: params.sharesBps,
     amountsWei,
-    totalBps: params.totalBps,
+    totalBps: params.totalBps ?? Number(params.sharesBps.reduce((s, b) => s + b, 0n)),
     totalAmountWei,
-    distributedWei,
+    distributedWei: redistributed,
     remainderWei,
+    rawRemainderWei,
+    remainderAppliedTo: params.recipients[remainderToIndex ?? 0],
   };
 }

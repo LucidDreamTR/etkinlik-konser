@@ -54,6 +54,7 @@ export default async function EventPage({ params }: PageProps) {
     contractParamsPreview = {
       ...contractParams,
       sharesBps: contractParams.sharesBps.map((v) => v.toString()),
+      recipients: contractParams.recipients,
     };
   } catch (e) {
     contractParamsError = e instanceof Error ? e.message : "Unknown error";
@@ -183,6 +184,10 @@ export default async function EventPage({ params }: PageProps) {
             <div className="mt-4 text-sm text-white/70">
               Dağıtılan: {amountsPreview.distributedWei.toString()} wei · Kalan (remainder):{" "}
               {amountsPreview.remainderWei.toString()} wei
+            </div>
+            <div className="text-sm text-white/70">
+              Raw remainder: {amountsPreview.rawRemainderWei.toString()} wei · Applied to:{" "}
+              {amountsPreview.remainderAppliedTo}
             </div>
           </div>
         ) : event.ticketPriceWei && amountsError ? (
