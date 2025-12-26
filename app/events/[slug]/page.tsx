@@ -8,6 +8,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { events } from "@/app/events.mock";
 import { resolveRecipient } from "@/lib/address";
+import { buildPayoutParams } from "@/lib/payouts";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
@@ -41,6 +42,20 @@ export default async function EventPage({ params }: PageProps) {
       : [];
 
   const totalBps = resolvedPayouts.reduce((sum, payout) => sum + payout.shareBps, 0);
+
+  let contractParamsError: string | null = null;
+  let contractParams: Awaited<ReturnType<typeof buildPayoutParams>> | null = null;
+  let contractParamsPreview: Record<string, unknown> | null = null;
+
+  try {
+    contractParams = await buildPayoutParams(event.payouts);
+    contractParamsPreview = {
+      ...contractParams,
+      sharesBps: contractParams.sharesBps.map((v) => v.toString()),
+    };
+  } catch (e) {
+    contractParamsError = e instanceof Error ? e.message : "Unknown error";
+  }
 
   return (
     <main className="min-h-screen bg-black text-white">
@@ -107,6 +122,22 @@ export default async function EventPage({ params }: PageProps) {
                 </tbody>
               </table>
             </div>
+          </div>
+        ) : null}
+
+        {contractParams && contractParamsPreview ? (
+          <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Contract Params (Preview)</h2>
+              <span className="text-sm text-white/60">Toplam %{(contractParams.totalBps / 100).toFixed(2)}</span>
+            </div>
+            <pre className="mt-3 overflow-x-auto rounded-2xl bg-black/40 p-4 text-xs text-white/80">
+{JSON.stringify(contractParamsPreview, null, 2)}
+            </pre>
+          </div>
+        ) : contractParamsError ? (
+          <div className="mt-6 rounded-3xl border border-amber-400/60 bg-amber-500/10 p-4 text-sm text-amber-200">
+            Contract Params error: {contractParamsError}
           </div>
         ) : null}
       </div>
