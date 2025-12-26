@@ -7,6 +7,7 @@ export const revalidate = 300;
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { BaseError, zeroAddress, type Address } from "viem";
+import { getTxChainName } from "@/lib/chain";
 import { events } from "@/app/events.mock";
 import { resolveRecipient } from "@/lib/address";
 import { buildPayoutParams, computeAmountsWei } from "@/lib/payouts";
@@ -57,6 +58,7 @@ export default async function EventPage({ params }: PageProps) {
   let amountsError: string | null = null;
   let transactionPayload: { to: string; value: string; data: string } | null = null;
   let transactionWarning: string | null = null;
+  let txNetworkName: string | null = null;
   let simulationRequest: Record<string, unknown> | null = null;
   let simulationError: string | null = null;
   let simulationNotice: string | null = null;
@@ -82,6 +84,12 @@ export default async function EventPage({ params }: PageProps) {
   }
 
   if (amountsPreview) {
+    try {
+      txNetworkName = getTxChainName();
+    } catch (e) {
+      simulationError = simulationError ?? (e instanceof Error ? e.message : "TX chain config error");
+    }
+
     const payoutContract = process.env.PAYOUT_CONTRACT_ADDRESS;
     if (!payoutContract) {
       transactionWarning = "Missing PAYOUT_CONTRACT_ADDRESS";
@@ -252,7 +260,10 @@ export default async function EventPage({ params }: PageProps) {
               <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-6">
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-semibold">Transaction Payload (Preview)</h2>
-                  <span className="text-sm text-white/60">payable distribute</span>
+                  <div className="flex items-center gap-3 text-sm text-white/60">
+                    {txNetworkName ? <span>TX Network: {txNetworkName}</span> : null}
+                    <span>payable distribute</span>
+                  </div>
                 </div>
                 <div className="mt-4 space-y-3 text-sm text-white/80">
                   <div className="flex items-center justify-between gap-3">
@@ -278,7 +289,10 @@ export default async function EventPage({ params }: PageProps) {
             <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-6">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Simulation (Preview)</h2>
-                <span className="text-sm text-white/60">viem.simulateContract</span>
+                <div className="flex items-center gap-3 text-sm text-white/60">
+                  {txNetworkName ? <span>TX Network: {txNetworkName}</span> : null}
+                  <span>viem.simulateContract</span>
+                </div>
               </div>
               {simulationNotice ? (
                 <div className="mt-3 text-sm text-amber-200">{simulationNotice}</div>
