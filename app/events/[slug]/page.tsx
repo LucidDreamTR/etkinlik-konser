@@ -6,9 +6,11 @@ export const revalidate = 300;
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { BaseError, zeroAddress, type Address } from "viem";
 import { events } from "@/app/events.mock";
 import { resolveRecipient } from "@/lib/address";
 import { buildPayoutParams, computeAmountsWei } from "@/lib/payouts";
+import { simulateDistribute } from "@/lib/simulate";
 import { encodeDistributeCalldata } from "@/lib/tx";
 
 type PageProps = {
@@ -18,6 +20,10 @@ type PageProps = {
 function normalizeSlug(raw: string) {
   // güvenli normalizasyon (trailing slash / encode / boşluk)
   return decodeURIComponent(raw).replace(/\/+$/, "").trim();
+}
+
+function bigintReplacer(_key: string, value: unknown) {
+  return typeof value === "bigint" ? value.toString() : value;
 }
 
 export default async function EventPage({ params }: PageProps) {
@@ -51,6 +57,9 @@ export default async function EventPage({ params }: PageProps) {
   let amountsError: string | null = null;
   let transactionPayload: { to: string; value: string; data: string } | null = null;
   let transactionWarning: string | null = null;
+  let simulationRequest: Record<string, unknown> | null = null;
+  let simulationError: string | null = null;
+  let simulationNotice: string | null = null;
 
   try {
     contractParams = await buildPayoutParams(event.payouts);
@@ -76,6 +85,7 @@ export default async function EventPage({ params }: PageProps) {
     const payoutContract = process.env.PAYOUT_CONTRACT_ADDRESS;
     if (!payoutContract) {
       transactionWarning = "Missing PAYOUT_CONTRACT_ADDRESS";
+      simulationNotice = "missing address";
     } else {
       const data = encodeDistributeCalldata({
         recipients: amountsPreview.recipients,
@@ -87,6 +97,29 @@ export default async function EventPage({ params }: PageProps) {
         value: amountsPreview.totalAmountWei.toString(),
         data,
       };
+
+      if (payoutContract.toLowerCase() === zeroAddress) {
+        simulationNotice = "placeholder address, skipped";
+      } else {
+        try {
+          const simulation = await simulateDistribute({
+            contract: payoutContract as Address,
+            recipients: amountsPreview.recipients,
+            amountsWei: amountsPreview.amountsWei,
+            valueWei: amountsPreview.totalAmountWei,
+          });
+          simulationRequest = simulation.request as unknown as Record<string, unknown>;
+        } catch (e) {
+          if (e instanceof BaseError) {
+            const cause = e.cause as { shortMessage?: string; message?: string } | undefined;
+            const causeMessage = cause?.shortMessage || cause?.message;
+            const baseMessage = e.shortMessage || e.message;
+            simulationError = causeMessage ? `${baseMessage} (${causeMessage})` : baseMessage;
+          } else {
+            simulationError = e instanceof Error ? e.message : "Simulation failed";
+          }
+        }
+      }
     }
   }
 
@@ -241,6 +274,26 @@ export default async function EventPage({ params }: PageProps) {
                 {transactionWarning}
               </div>
             ) : null}
+
+            <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold">Simulation (Preview)</h2>
+                <span className="text-sm text-white/60">viem.simulateContract</span>
+              </div>
+              {simulationNotice ? (
+                <div className="mt-3 text-sm text-amber-200">{simulationNotice}</div>
+              ) : simulationError ? (
+                <div className="mt-3 rounded-2xl border border-amber-400/60 bg-amber-500/10 p-3 text-sm text-amber-200">
+                  {simulationError}
+                </div>
+              ) : simulationRequest ? (
+                <pre className="mt-3 overflow-x-auto rounded-2xl bg-black/40 p-4 text-xs text-white/80">
+{JSON.stringify(simulationRequest, bigintReplacer, 2)}
+                </pre>
+              ) : (
+                <div className="mt-3 text-sm text-white/60">Simulation unavailable</div>
+              )}
+            </div>
           </>
         ) : event.ticketPriceWei && amountsError ? (
           <div className="mt-6 rounded-3xl border border-amber-400/60 bg-amber-500/10 p-4 text-sm text-amber-200">
