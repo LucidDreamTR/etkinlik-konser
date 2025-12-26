@@ -35,6 +35,8 @@ export type EventRecord = {
     saleStatus: "soon" | "on" | "soldout";
   };
 
+  ticketPriceWei?: string;
+
   coverImageSrc?: string;
 
   payouts: PayoutSplit[];
@@ -57,6 +59,7 @@ export const EVENTS: EventRecord[] = [
     status: "upcoming",
     tags: ["Rock", "Live", "Beyoğlu"],
     ticket: { priceTryLabel: "₺850", supplyLabel: "120 bilet", saleStatus: "soon" },
+    ticketPriceWei: "100000000000000000", // 0.1 ETH
     payouts: [
       { role: "artist", label: "Headliner", recipient: "konser.eth", shareBps: 7000 },
       { role: "organizer", label: "Organizasyon", recipient: "0x69B358ff6fCB231751302a3c07378410fCC8E575", shareBps: 1500 },

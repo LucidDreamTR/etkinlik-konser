@@ -3,7 +3,7 @@ import 'server-only';
 import { getAddress, type Address } from 'viem';
 
 import { resolveRecipient } from './address';
-import type { EventRecord, PayoutSplit } from './events';
+import type { PayoutSplit } from './events';
 
 export type BuiltPayoutParams = {
   recipients: Address[];
@@ -28,5 +28,31 @@ export async function buildPayoutParams(payouts: PayoutSplit[]): Promise<BuiltPa
     recipients: resolved.map((p) => p.address),
     sharesBps: resolved.map((p) => BigInt(p.shareBps)),
     totalBps,
+  };
+}
+
+export type BuiltAmounts = {
+  recipients: Address[];
+  sharesBps: bigint[];
+  amountsWei: bigint[];
+  totalBps: number;
+  totalAmountWei: bigint;
+  distributedWei: bigint;
+  remainderWei: bigint; // total - distributed
+};
+
+export function computeAmountsWei(params: BuiltPayoutParams, totalAmountWei: bigint): BuiltAmounts {
+  const amountsWei = params.sharesBps.map((bps) => (totalAmountWei * bps) / 10000n);
+  const distributedWei = amountsWei.reduce((a, b) => a + b, 0n);
+  const remainderWei = totalAmountWei - distributedWei;
+
+  return {
+    recipients: params.recipients,
+    sharesBps: params.sharesBps,
+    amountsWei,
+    totalBps: params.totalBps,
+    totalAmountWei,
+    distributedWei,
+    remainderWei,
   };
 }

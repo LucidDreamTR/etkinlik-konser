@@ -7,6 +7,7 @@ export const events: EventRecord[] = [
     date: "12 Nisan 2025",
     location: "İstanbul",
     description: "Gecenin headliner’ları ve sürpriz konuklarla premium rock deneyimi.",
+    ticketPriceWei: "100000000000000000", // 0.1 ETH
     payouts: [
       { role: "artist", label: "Headliner", recipient: "konser.eth", shareBps: 7000 },
       { role: "organizer", label: "Organizasyon", recipient: "0x69B358ff6fCB231751302a3c07378410fCC8E575", shareBps: 1500 },
@@ -20,6 +21,7 @@ export const events: EventRecord[] = [
     date: "3 Mayıs 2025",
     location: "Ankara",
     description: "Analog synth’ler, deep bass ve görsel şovla elektronik gece.",
+    ticketPriceWei: "150000000000000000", // 0.15 ETH
     payouts: [
       { role: "artist", label: "DJ Set", recipient: "0x5FbDB2315678afecb367f032d93F642f64180aa3", shareBps: 6500 },
       { role: "organizer", recipient: "0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2", shareBps: 2000 },
