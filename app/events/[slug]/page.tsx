@@ -7,6 +7,7 @@ export const revalidate = 300;
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { events } from "@/app/events.mock";
+import { resolveRecipient } from "@/lib/address";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
@@ -23,6 +24,23 @@ export default async function EventPage({ params }: PageProps) {
 
   const event = events.find((e) => e.slug === normalized);
   if (!event) return notFound();
+
+  const resolvedPayouts =
+    event.payouts && event.payouts.length > 0
+      ? await Promise.all(
+          event.payouts.map(async (payout) => {
+            try {
+              const address = await resolveRecipient(payout.recipient);
+              return { ...payout, address, error: null as string | null };
+            } catch (e) {
+              const message = e instanceof Error ? e.message : "Resolve failed";
+              return { ...payout, address: null as string | null, error: message };
+            }
+          }),
+        )
+      : [];
+
+  const totalBps = resolvedPayouts.reduce((sum, payout) => sum + payout.shareBps, 0);
 
   return (
     <main className="min-h-screen bg-black text-white">
@@ -42,6 +60,55 @@ export default async function EventPage({ params }: PageProps) {
         <div className="mt-10 rounded-3xl border border-white/10 bg-white/5 p-6">
           Bu etkinlik sayfası server-side üretilir ve cache/ISR mantığı revalidate ile yönetilir.
         </div>
+
+        {resolvedPayouts.length > 0 ? (
+          <div className="mt-10 rounded-3xl border border-white/10 bg-white/5 p-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-semibold">Payout Split (Preview)</h2>
+              {totalBps !== 10000 ? (
+                <span className="text-sm text-amber-300">
+                  Uyarı: toplam %{(totalBps / 100).toFixed(2)} (100.00 değil)
+                </span>
+              ) : (
+                <span className="text-sm text-white/60">Toplam %{(totalBps / 100).toFixed(2)}</span>
+              )}
+            </div>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-white/50">
+                  <tr>
+                    <th className="py-2">Role / Label</th>
+                    <th className="py-2">Input (ENS/0x)</th>
+                    <th className="py-2">Resolved Address</th>
+                    <th className="py-2 text-right">Share (%)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {resolvedPayouts.map((payout) => (
+                    <tr key={`${payout.role}-${payout.recipient}`} className="align-top">
+                      <td className="py-3">
+                        <div className="font-semibold capitalize">{payout.role}</div>
+                        {payout.label ? <div className="text-white/60">{payout.label}</div> : null}
+                      </td>
+                      <td className="py-3 text-white/80">{payout.recipient}</td>
+                      <td className="py-3">
+                        {payout.address ? (
+                          <span className="text-emerald-300">{payout.address}</span>
+                        ) : (
+                          <span className="text-amber-300">{payout.error ?? "not resolved"}</span>
+                        )}
+                      </td>
+                      <td className="py-3 text-right text-white/80">
+                        {(payout.shareBps / 100).toFixed(2)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
       </div>
     </main>
   );
