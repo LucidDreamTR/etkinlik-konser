@@ -6,13 +6,14 @@ export const revalidate = 300;
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { BaseError, zeroAddress, type Address } from "viem";
+import { BaseError, zeroAddress, parseEther, type Address, type Hex } from "viem";
 import { getTxChainName } from "@/lib/chain";
 import { events } from "@/app/events.mock";
 import { resolveRecipient } from "@/lib/address";
 import { buildPayoutParams, computeAmountsWei } from "@/lib/payouts";
 import { simulateDistribute } from "@/lib/simulate";
 import { encodeDistributeCalldata } from "@/lib/tx";
+import PayWithMetaMask from "./PayWithMetaMask";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
@@ -56,7 +57,7 @@ export default async function EventPage({ params }: PageProps) {
   let contractParamsPreview: Record<string, unknown> | null = null;
   let amountsPreview: ReturnType<typeof computeAmountsWei> | null = null;
   let amountsError: string | null = null;
-  let transactionPayload: { to: string; value: string; data: string } | null = null;
+  let transactionPayload: { to: `0x${string}`; value: bigint; data: Hex } | null = null;
   let transactionWarning: string | null = null;
   let txNetworkName: string | null = null;
   let simulationRequest: Record<string, unknown> | null = null;
@@ -74,12 +75,25 @@ export default async function EventPage({ params }: PageProps) {
     contractParamsError = e instanceof Error ? e.message : "Unknown error";
   }
 
-  if (contractParams && event.ticketPriceWei) {
+  const priceInput = event.ticketPriceWei as unknown;
+  let resolvedPriceWei: bigint | null = null;
+  try {
+    if (typeof priceInput === "bigint") {
+      resolvedPriceWei = priceInput;
+    } else if (typeof priceInput === "number") {
+      resolvedPriceWei = parseEther(priceInput.toString());
+    } else if (typeof priceInput === "string" && priceInput.trim().length > 0) {
+      resolvedPriceWei = priceInput.includes(".") ? parseEther(priceInput) : BigInt(priceInput);
+    }
+  } catch (e) {
+    amountsError = amountsError ?? (e instanceof Error ? e.message : "Price parse error");
+  }
+
+  if (contractParams && resolvedPriceWei !== null) {
     try {
-      const totalAmountWei = BigInt(event.ticketPriceWei);
-      amountsPreview = computeAmountsWei(contractParams, totalAmountWei);
+      amountsPreview = computeAmountsWei(contractParams, resolvedPriceWei);
     } catch (e) {
-      amountsError = e instanceof Error ? e.message : "Unknown error";
+      amountsError = amountsError ?? (e instanceof Error ? e.message : "Unknown error");
     }
   }
 
@@ -90,9 +104,9 @@ export default async function EventPage({ params }: PageProps) {
       simulationError = simulationError ?? (e instanceof Error ? e.message : "TX chain config error");
     }
 
-    const payoutContract = process.env.PAYOUT_CONTRACT_ADDRESS;
+    const payoutContract = process.env.NEXT_PUBLIC_PAYOUT_CONTRACT_ADDRESS;
     if (!payoutContract) {
-      transactionWarning = "Missing PAYOUT_CONTRACT_ADDRESS";
+      transactionWarning = "Missing NEXT_PUBLIC_PAYOUT_CONTRACT_ADDRESS";
       simulationNotice = "missing address";
     } else {
       const data = encodeDistributeCalldata({
@@ -100,11 +114,7 @@ export default async function EventPage({ params }: PageProps) {
         amountsWei: amountsPreview.amountsWei,
       });
 
-      transactionPayload = {
-        to: payoutContract,
-        value: amountsPreview.totalAmountWei.toString(),
-        data,
-      };
+      transactionPayload = { to: payoutContract as `0x${string}`, value: amountsPreview.totalAmountWei, data: data as Hex };
 
       if (payoutContract.toLowerCase() === zeroAddress) {
         simulationNotice = "placeholder address, skipped";
@@ -272,7 +282,7 @@ export default async function EventPage({ params }: PageProps) {
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-white/60">value</span>
-                    <span className="font-mono">{transactionPayload.value}</span>
+                    <span className="font-mono">{transactionPayload.value.toString()}</span>
                   </div>
                   <div>
                     <div className="text-white/60">data</div>
@@ -283,6 +293,18 @@ export default async function EventPage({ params }: PageProps) {
             ) : transactionWarning ? (
               <div className="mt-4 rounded-3xl border border-amber-400/60 bg-amber-500/10 p-4 text-sm text-amber-200">
                 {transactionWarning}
+              </div>
+            ) : null}
+
+            {transactionPayload ? (
+              <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-6">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold">Payment (MetaMask)</h2>
+                  <span className="text-sm text-white/60">Sepolia testnet</span>
+                </div>
+                <div className="mt-4">
+                  <PayWithMetaMask to={transactionPayload.to} value={transactionPayload.value} data={transactionPayload.data} />
+                </div>
               </div>
             ) : null}
 

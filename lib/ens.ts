@@ -27,6 +27,6 @@ export async function resolveEnsAddress(name: string) {
 
 export const resolveEnsAddressCached = unstable_cache(
   async (name: string) => resolveEnsAddress(name),
-  (name: string) => ['ens-resolve', name],
+  ['ens-resolve'],
   { revalidate: 60 },
 );
