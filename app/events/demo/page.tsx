@@ -17,7 +17,7 @@ export default function DemoEventPage() {
           </p>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <Link
-              href="/events/rock-gecesi"
+              href="/events/rock-gecesi-istanbul"
               className="inline-flex items-center justify-center rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition-opacity hover:opacity-90"
             >
               Detay sayfasına git

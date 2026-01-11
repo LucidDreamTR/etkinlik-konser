@@ -9,6 +9,7 @@ import { parseEther, type Hex } from "viem";
 
 import { resolveRecipient } from "@/lib/address";
 import { buildPayoutParams, computeAmountsWei } from "@/lib/payouts";
+import { normalizeSplitSlug } from "@/lib/events";
 import { normalizeSlug } from "@/lib/slug";
 import { EVENTS } from "@/data/events";
 import { PAYOUT_ADDRESS } from "@/src/contracts/payoutDistributor.config";
@@ -53,7 +54,7 @@ export default async function EventPage({ params }: PageProps) {
   }
 
   const planId = event.planId.trim();
-  const splitSlug = planId;
+  const splitSlug = normalizeSplitSlug(planId);
   const stableOrderId = `order-${splitSlug}`;
 
   const resolvedPayouts =
@@ -103,7 +104,7 @@ export default async function EventPage({ params }: PageProps) {
     contractParamsError = e instanceof Error ? e.message : "Unknown error";
   }
 
-  const priceInput = event.ticketPriceWei as unknown;
+  const priceInput = (event.priceWei ?? event.ticketPriceWei) as unknown;
   let resolvedPriceWei: bigint | null = null;
   try {
     if (typeof priceInput === "bigint") {
@@ -130,12 +131,16 @@ export default async function EventPage({ params }: PageProps) {
 
     const payoutContract = PAYOUT_ADDRESS;
     const ticketSaleContract = TICKET_SALE_ADDRESS;
-    const splitIdInput = splitSlug;
+    const splitIdInput = event.splitId;
     const orderIdInput = stableOrderId;
-    const eventIdInput = BigInt(EVENTS.findIndex((e) => e.slug === normalized) + 1);
+    const eventIdInput = BigInt(EVENTS.findIndex((e) => normalizeSlug(e.slug) === normalized) + 1);
 
     if (!ticketSaleContract) {
       transactionWarning = "NFT bilet satın alma şu anda hazır değil.";
+    } else if (event.paused) {
+      transactionWarning = "Bu etkinlik şu anda duraklatıldı.";
+    } else if (event.maxSupply <= 0) {
+      transactionWarning = "Bu etkinlik için biletler tükendi.";
     } else if (resolvedPriceWei === null || resolvedPriceWei <= 0n) {
       transactionWarning = "Bu etkinlik henüz ödeme için hazır değil.";
     } else {
@@ -144,7 +149,7 @@ export default async function EventPage({ params }: PageProps) {
           splitId: splitIdInput,
           orderId: orderIdInput,
           eventId: eventIdInput,
-          uri: "",
+          uri: event.baseURI ?? "",
         });
 
         transactionPayload = {

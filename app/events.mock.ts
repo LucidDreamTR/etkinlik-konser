@@ -1,9 +1,14 @@
-import type { EventRecord } from "@/lib/events";
+import { buildSplitId, type EventRecord } from "@/lib/events";
 
 export const events: EventRecord[] = [
   {
-    slug: "rock-gecesi",
-    planId: "rock-gecesi",
+    slug: "rock-gecesi-istanbul",
+    planId: "rock-gecesi-istanbul",
+    splitId: buildSplitId("rock-gecesi-istanbul"),
+    priceWei: "100000000000000000", // 0.1 ETH
+    maxSupply: 1000,
+    paused: false,
+    baseURI: "ipfs://tickets/rock-gecesi-istanbul/",
     title: "Rock Gecesi",
     date: "12 Nisan 2025",
     location: "İstanbul",
@@ -19,6 +24,11 @@ export const events: EventRecord[] = [
   {
     slug: "elektronik-gece",
     planId: "elektronik-gece",
+    splitId: buildSplitId("elektronik-gece"),
+    priceWei: "150000000000000000", // 0.15 ETH
+    maxSupply: 750,
+    paused: false,
+    baseURI: "ipfs://tickets/elektronik-gece/",
     title: "Elektronik Gece",
     date: "3 Mayıs 2025",
     location: "Ankara",

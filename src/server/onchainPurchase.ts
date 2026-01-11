@@ -10,6 +10,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
+import { normalizeSplitSlug } from "@/lib/events";
 import { ticketSaleAbi } from "@/src/contracts/ticketSale.abi";
 import { ticketNftAbi } from "@/src/contracts/ticketNft.abi";
 import { requireAddressEnv, requireEnv, validateServerEnv } from "@/src/server/env";
@@ -43,9 +44,14 @@ type PurchaseArgs = {
   uri?: string;
 };
 
+function isBytes32Hex(value: string): value is Hex {
+  return /^0x[0-9a-fA-F]{64}$/.test(value);
+}
+
 function hashId(value: string): Hex {
   const trimmed = value.trim();
   if (!trimmed) throw new Error("ID boş olamaz");
+  if (isBytes32Hex(trimmed)) return trimmed;
   return keccak256(toBytes(trimmed));
 }
 
@@ -173,6 +179,7 @@ export async function purchaseOnchain({
   const custody = normalizeBuyerAddress(custodyEnv, account.address);
   const buyer = normalizeBuyerAddress(buyerAddress, custody);
   const normalizedEventId = normalizeEventId(eventId);
+  const normalizedSplit = normalizeSplitSlug(splitSlug);
   const chainId = await publicClient.getChainId();
 
   const valueWei =
@@ -184,7 +191,7 @@ export async function purchaseOnchain({
     address: ticketSaleAddressResolved,
     abi: ticketSaleAbi,
     functionName: "purchaseFor",
-    args: [buyer, hashId(splitSlug), hashId(merchantOrderId), normalizedEventId, uri ?? ""],
+    args: [buyer, hashId(normalizedSplit), hashId(merchantOrderId), normalizedEventId, uri ?? ""],
     value: valueWei,
   });
 

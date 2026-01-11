@@ -38,7 +38,7 @@ export async function POST(request: Request) {
   }
 
   const eventId = payload.eventId ?? 1;
-  const splitSlug = payload.splitSlug ?? defaultEvent.planId ?? defaultEvent.slug;
+  const splitSlug = payload.splitSlug ?? defaultEvent.splitId ?? defaultEvent.planId ?? defaultEvent.slug;
   const amountTry = payload.amountTry ?? 1;
 
   try {

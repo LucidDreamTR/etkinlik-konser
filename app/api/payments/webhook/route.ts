@@ -42,22 +42,62 @@ export async function POST(request: Request) {
     const existing = await getOrderByMerchantId(verification.merchantOrderId);
     if (existing) {
       if (existing.payment_status === "paid" || existing.claimStatus === "claimed") {
+        console.log("[paytr.webhook]", {
+          merchant_oid: verification.merchantOrderId,
+          status: verification.status,
+          amount: verification.paymentAmount ?? verification.totalAmount,
+          previous_state: existing.payment_status,
+          new_state: existing.payment_status,
+          decision: "ignored",
+          reason: "duplicate",
+        });
         return NextResponse.json({ ok: true, status: "duplicate" });
       }
-      if (existing.amountTry && String(existing.amountTry) !== String(verification.totalAmount)) {
+      if (existing.payment_status === "failed" && verification.status === "success") {
+        console.log("[paytr.webhook]", {
+          merchant_oid: verification.merchantOrderId,
+          status: verification.status,
+          amount: verification.paymentAmount ?? verification.totalAmount,
+          previous_state: existing.payment_status,
+          new_state: existing.payment_status,
+          decision: "ignored",
+          reason: "success_after_failed",
+        });
+        return NextResponse.json({ ok: true, status: "ignored" });
+      }
+
+      const incomingAmount = verification.paymentAmount ?? verification.totalAmount;
+      if (existing.amountTry && String(existing.amountTry) !== String(incomingAmount)) {
         await recordOrderStatus({
           merchantOrderId: verification.merchantOrderId,
           eventId: String(eventId),
           splitSlug,
           buyerAddress: verification.buyerAddress ?? null,
-          amountTry: String(verification.totalAmount),
-          payment_status: "amount_mismatch",
+          amountTry: String(incomingAmount),
+          payment_status: "FLAGGED_AMOUNT_MISMATCH",
         });
-        return NextResponse.json({ ok: false, error: "Amount mismatch" }, { status: 400 });
+        console.log("[paytr.webhook]", {
+          merchant_oid: verification.merchantOrderId,
+          status: verification.status,
+          amount: incomingAmount,
+          previous_state: existing.payment_status,
+          new_state: "FLAGGED_AMOUNT_MISMATCH",
+          decision: "flagged",
+          reason: "amount_mismatch",
+        });
+        return NextResponse.json({ ok: true, status: "flagged" });
       }
     }
 
     if (verification.status !== "success") {
+      console.log("[paytr.webhook]", {
+        merchant_oid: verification.merchantOrderId,
+        status: verification.status,
+        amount: verification.paymentAmount ?? verification.totalAmount,
+        previous_state: existing?.payment_status ?? "none",
+        new_state: verification.status,
+        decision: "processed",
+      });
       await recordOrderStatus({
         merchantOrderId: verification.merchantOrderId,
         eventId: String(eventId),
@@ -82,8 +122,25 @@ export async function POST(request: Request) {
     );
 
     if (result.status === "processed" || result.status === "duplicate") {
+      console.log("[paytr.webhook]", {
+        merchant_oid: verification.merchantOrderId,
+        status: verification.status,
+        amount: verification.paymentAmount ?? verification.totalAmount,
+        previous_state: existing?.payment_status ?? "none",
+        new_state: result.status === "processed" ? "paid" : existing?.payment_status ?? "paid",
+        decision: result.status === "processed" ? "processed" : "ignored",
+      });
       return NextResponse.json({ ok: true, status: result.status, ...(result.txHash ? { txHash: result.txHash } : {}) });
     }
+    console.log("[paytr.webhook]", {
+      merchant_oid: verification.merchantOrderId,
+      status: verification.status,
+      amount: verification.paymentAmount ?? verification.totalAmount,
+      previous_state: existing?.payment_status ?? "none",
+      new_state: existing?.payment_status ?? "pending",
+      decision: "ignored",
+      reason: "pending",
+    });
     return NextResponse.json({ ok: true, status: "recorded", message: result.message });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

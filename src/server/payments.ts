@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
+import { normalizeSplitSlug } from "@/lib/events";
 import { getOrderByMerchantId, recordPaidOrder } from "@/src/lib/ordersStore";
 import { purchaseOnchain } from "@/src/server/onchainPurchase";
 
@@ -43,7 +44,7 @@ export async function processPayment(
   options: { allowPendingToProcess?: boolean } = {}
 ): Promise<PaymentResult> {
   const merchantOrderId = normalizeString(payload.merchantOrderId, "merchantOrderId");
-  const splitSlug = normalizeString(payload.splitSlug, "splitSlug");
+  const splitSlug = normalizeSplitSlug(normalizeString(payload.splitSlug, "splitSlug"));
   const buyerAddress = payload.buyerAddress ?? null;
 
   const existing = await getOrderByMerchantId(merchantOrderId);
