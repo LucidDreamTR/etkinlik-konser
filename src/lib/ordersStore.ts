@@ -35,7 +35,10 @@ async function readStore(): Promise<PaymentOrder[]> {
     return JSON.parse(raw) as PaymentOrder[];
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    if (err.code === "ENOENT") return [];
+    if (err.code === "ENOENT") {
+      await writeStore([]);
+      return [];
+    }
     throw error;
   }
 }
