@@ -44,3 +44,8 @@ next-env.d.ts
 artifacts/
 cache/
 typechain-types/
+
+# runtime data
+data/orders.json
+data/*.log
+data/*.tmp

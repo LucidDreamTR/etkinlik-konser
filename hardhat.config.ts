@@ -7,6 +7,12 @@ const pk = pkRaw ? (pkRaw.startsWith("0x") ? pkRaw : `0x${pkRaw}`) : "";
 
 const config: HardhatUserConfig = {
   solidity: "0.8.20",
+  paths: {
+    sources: "./contracts/src",
+    tests: "./test",
+    cache: "./cache",
+    artifacts: "./artifacts",
+  },
   networks: {
     sepolia: {
       url: process.env.ETHEREUM_TX_RPC_URL || "",
