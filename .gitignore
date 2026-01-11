@@ -49,3 +49,18 @@ typechain-types/
 data/orders.json
 data/*.log
 data/*.tmp
+
+# Foundry
+contracts/**/out/
+contracts/**/cache/
+contracts/**/broadcast/
+contracts/**/lib/
+contracts/**/forge-cache/
+contracts/**/.env
+contracts/**/.env.*
+
+# Node / Next
+node_modules/
+.next/
+dist/
+*.log
