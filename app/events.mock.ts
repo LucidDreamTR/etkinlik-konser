@@ -3,6 +3,7 @@ import type { EventRecord } from "@/lib/events";
 export const events: EventRecord[] = [
   {
     slug: "rock-gecesi",
+    planId: "rock-gecesi",
     title: "Rock Gecesi",
     date: "12 Nisan 2025",
     location: "İstanbul",
@@ -17,6 +18,7 @@ export const events: EventRecord[] = [
   },
   {
     slug: "elektronik-gece",
+    planId: "elektronik-gece",
     title: "Elektronik Gece",
     date: "3 Mayıs 2025",
     location: "Ankara",

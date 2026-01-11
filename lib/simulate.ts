@@ -3,20 +3,16 @@ import "server-only";
 import { type Address } from "viem";
 
 import { getPublicClient } from "./chain";
-import { payoutAbi } from "./tx";
+import { hashId } from "@/src/lib/payoutDistributor";
+import { payoutDistributorAbi } from "@/src/contracts/payoutDistributor.abi";
 
-export async function simulateDistribute(args: {
-  contract: Address;
-  recipients: Address[];
-  amountsWei: bigint[];
-  valueWei: bigint;
-}) {
+export async function simulateDistribute(args: { contract: Address; splitId: string; orderId: string; valueWei: bigint }) {
   const client = getPublicClient();
   return client.simulateContract({
     address: args.contract,
-    abi: payoutAbi,
+    abi: payoutDistributorAbi,
     functionName: "distribute",
-    args: [args.recipients, args.amountsWei],
+    args: [hashId(args.splitId), hashId(args.orderId)],
     value: args.valueWei,
   });
 }

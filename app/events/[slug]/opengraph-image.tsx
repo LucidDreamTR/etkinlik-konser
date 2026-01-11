@@ -1,5 +1,5 @@
 import { ImageResponse } from "next/og";
-import { getEventBySlug } from "@/lib/events";
+import { getEventBySlug } from "@/data/events";
 
 export const runtime = "edge";
 export const revalidate = 3600;

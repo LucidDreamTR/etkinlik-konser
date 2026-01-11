@@ -4,7 +4,8 @@ export const dynamic = "auto";
 export const revalidate = 300;
 
 import Link from "next/link";
-import { events } from "@/app/events.mock";
+
+import { EVENTS } from "@/data/events";
 
 export default function EventsPage() {
   return (
@@ -13,7 +14,7 @@ export default function EventsPage() {
         <h1 className="mb-10 text-4xl font-semibold">Etkinlikler</h1>
 
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {events.map((e) => (
+          {EVENTS.map((e) => (
             <Link
               key={e.slug}
               href={`/events/${e.slug}`}

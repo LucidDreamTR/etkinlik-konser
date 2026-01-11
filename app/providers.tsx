@@ -2,15 +2,15 @@
 
 import * as React from 'react'
 import { WagmiProvider, createConfig, http } from 'wagmi'
-import { sepolia } from 'wagmi/chains'
 import { injected } from 'wagmi/connectors'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { anvilLocal } from '@/src/chains/anvilLocal'
 
 const config = createConfig({
-  chains: [sepolia],
+  chains: [anvilLocal],
   connectors: [injected({ target: 'metaMask' })],
   transports: {
-    [sepolia.id]: http(), // chain’in default public RPC’lerini kullanır; client’a özel RPC gömmez
+    [anvilLocal.id]: http(anvilLocal.rpcUrls.default.http[0]),
   },
 })
 
