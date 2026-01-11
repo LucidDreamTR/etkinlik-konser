@@ -84,10 +84,8 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
   - `TicketNFT.setMinter(TicketSale)`
 - Configure each split:
   - `PayoutDistributor.setSplit(splitId, recipients, allocations)`
-- Configure each event:
-  - `TicketSale.setEventConfig(eventId, priceWei, maxSupply, paused)`
-- Confirm relayer address:
-  - `TicketSale.relayer()` or `TicketSale.trustedRelayer()`
+- Event config zincirde tutulmaz; event state ve fiyat doğrulaması backend tarafındadır.
+
 
 ## Verification checklist
 
@@ -98,8 +96,8 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 - `/api/tickets/claim`
 
 ### On-chain checks (cast)
-- `cast call <sale> "relayer()(address)"`
-- `cast call <sale> "eventConfigs(uint256)(uint256,uint256,bool,uint256,bool)" <eventId>`
+- `cast call <sale> "paused()(bool)"`
+- `cast call <sale> "usedOrderIds(bytes32)(bool)" <orderId>`
 - `cast call <nft> "ownerOf(uint256)(address)" <tokenId>`
 
 ### Idempotency
@@ -110,14 +108,12 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 - Log `txHash`, `merchant_oid`, `status` with redaction
 - Never log private keys, full signatures, or claim codes
 - Track error taxonomy:
-  - `SoldOut`
-  - `EventPaused`
-  - `MissingEventConfig`
+  - `SalesPaused`
   - `InvalidPayment`
-  - `OnlyRelayer`
+  - `OrderUsed`
 
 ## Rollback / incident response
-- Pause event: `setEventConfig(eventId, priceWei, maxSupply, true)`
+- Pause sales: `TicketSale.setPaused(true)`
 - Rotate relayer key and call `setRelayer(newRelayer)`
 - Temporarily disable webhook endpoint (edge routing / WAF rule)
 
@@ -129,4 +125,4 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 - Run a 0-amount or minimal payment test before opening traffic
 
 ## Troubleshooting note
-- If you see `MissingEventConfig` from `/api/payments/fake-pay` or `/api/payments/webhook`, check RPC URL and sale address logs in `src/server/onchainPurchase.ts` first.
+- TicketSale zincirde event konfigürasyonu tutmaz; backend event state ve fiyat doğrulamasının tek sahibidir.

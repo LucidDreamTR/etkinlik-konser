@@ -139,8 +139,6 @@ export default async function EventPage({ params }: PageProps) {
       transactionWarning = "NFT bilet satın alma şu anda hazır değil.";
     } else if (event.paused) {
       transactionWarning = "Bu etkinlik şu anda duraklatıldı.";
-    } else if (event.maxSupply <= 0) {
-      transactionWarning = "Bu etkinlik için biletler tükendi.";
     } else if (resolvedPriceWei === null || resolvedPriceWei <= 0n) {
       transactionWarning = "Bu etkinlik henüz ödeme için hazır değil.";
     } else {

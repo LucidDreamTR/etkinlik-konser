@@ -17,22 +17,6 @@ import { requireAddressEnv, requireEnv, validateServerEnv } from "@/src/server/e
 
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? process.env.RPC_URL ?? "http://127.0.0.1:8545";
 
-const eventConfigAbi = [
-  {
-    type: "function",
-    name: "eventConfigs",
-    stateMutability: "view",
-    inputs: [{ name: "", type: "uint256", internalType: "uint256" }],
-    outputs: [
-      { name: "priceWei", type: "uint256", internalType: "uint256" },
-      { name: "maxSupply", type: "uint256", internalType: "uint256" },
-      { name: "paused", type: "bool", internalType: "bool" },
-      { name: "minted", type: "uint256", internalType: "uint256" },
-      { name: "exists", type: "bool", internalType: "bool" },
-    ],
-  },
-] as const;
-
 type PurchaseArgs = {
   merchantOrderId: string;
   splitSlug: string;
@@ -70,82 +54,13 @@ function normalizeEventId(eventId: PurchaseArgs["eventId"]): bigint {
   throw new Error("eventId okunamadı");
 }
 
-function normalizeBuyerAddress(value: PurchaseArgs["buyerAddress"], fallback: `0x${string}`): `0x${string}` {
-  if (!value) return fallback;
-  if (typeof value !== "string") throw new Error("buyerAddress string olmalı");
-  const trimmed = value.trim();
-  if (!trimmed) return fallback;
-  const normalized = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
-  return getAddress(normalized);
-}
-
-async function readEventPriceWei(
-  client: ReturnType<typeof createPublicClient>,
-  ticketSaleAddress: `0x${string}`,
-  eventId: bigint,
-  chainId: number
-): Promise<bigint> {
-  if (process.env.NODE_ENV !== "production") {
-    console.log("[onchainPurchase] eventConfig.read.before", {
-      rpcUrl: RPC_URL,
-      ticketSaleAddress,
-      chainId,
-      eventId: eventId.toString(),
-    });
-  }
-
-  const raw = await client.readContract({
-    address: ticketSaleAddress,
-    abi: eventConfigAbi,
-    functionName: "eventConfigs",
-    args: [eventId],
-  });
-
-  let priceWei: unknown;
-  let maxSupply: unknown;
-  let paused: unknown;
-  let minted: unknown;
-  let exists: unknown;
-
-  if (Array.isArray(raw)) {
-    [priceWei, maxSupply, paused, minted, exists] = raw;
-  } else {
-    ({ priceWei, maxSupply, paused, minted, exists } = raw as {
-      priceWei?: unknown;
-      maxSupply?: unknown;
-      paused?: unknown;
-      minted?: unknown;
-      exists?: unknown;
-    });
-  }
-
-  if (process.env.NODE_ENV !== "production") {
-    console.log("[onchainPurchase] eventConfig.read.after", {
-      raw,
-      parsed: { priceWei, maxSupply, paused, minted, exists },
-    });
-  }
-
-  if (exists !== true) {
-    throw new Error(`MissingEventConfig eventId=${eventId.toString()} sale=${ticketSaleAddress} chainId=${chainId}`);
-  }
-  if (paused === true) {
-    throw new Error(`EventPaused eventId=${eventId.toString()}`);
-  }
-  if (typeof priceWei !== "bigint") {
-    throw new Error(`InvalidEventConfig priceWei=${String(priceWei)}`);
-  }
-
-  return priceWei;
-}
-
 export async function purchaseOnchain({
   merchantOrderId,
   splitSlug,
   eventId,
   amountTry: _amountTry,
   amountWei,
-  buyerAddress,
+  buyerAddress: _buyerAddress,
   ticketSaleAddress,
   uri,
 }: PurchaseArgs): Promise<{ txHash: Hex; tokenId: string; nftAddress: `0x${string}` }> {
@@ -171,27 +86,40 @@ export async function purchaseOnchain({
     throw new Error(`Invalid ticketSaleAddress: ${String(saleRaw)}`);
   }
   const nftAddress = requireAddressEnv("NEXT_PUBLIC_TICKET_NFT_ADDRESS");
-  const custodyEnv = process.env.CUSTODY_ADDRESS;
 
   const account = privateKeyToAccount(privateKey);
   const publicClient = createPublicClient({ transport: http(RPC_URL) });
   const walletClient = createWalletClient({ account, transport: http(RPC_URL) });
-  const custody = normalizeBuyerAddress(custodyEnv, account.address);
-  const buyer = normalizeBuyerAddress(buyerAddress, custody);
   const normalizedEventId = normalizeEventId(eventId);
   const normalizedSplit = normalizeSplitSlug(splitSlug);
-  const chainId = await publicClient.getChainId();
-
-  const valueWei =
-    normalizeAmountWei(amountWei) ??
-    (await readEventPriceWei(publicClient, ticketSaleAddressResolved, normalizedEventId, chainId));
+  const valueWei = normalizeAmountWei(amountWei);
+  if (valueWei === null) {
+    throw new Error("Missing amountWei");
+  }
+  const isPaused = await publicClient.readContract({
+    address: ticketSaleAddressResolved,
+    abi: ticketSaleAbi,
+    functionName: "paused",
+  });
+  if (isPaused) {
+    throw new Error("SalesPaused");
+  }
+  const isUsed = await publicClient.readContract({
+    address: ticketSaleAddressResolved,
+    abi: ticketSaleAbi,
+    functionName: "usedOrderIds",
+    args: [hashId(merchantOrderId)],
+  });
+  if (isUsed) {
+    throw new Error("OrderUsed");
+  }
 
   const { request } = await publicClient.simulateContract({
     account,
     address: ticketSaleAddressResolved,
     abi: ticketSaleAbi,
-    functionName: "purchaseFor",
-    args: [buyer, hashId(normalizedSplit), hashId(merchantOrderId), normalizedEventId, uri ?? ""],
+    functionName: "purchase",
+    args: [hashId(normalizedSplit), hashId(merchantOrderId), normalizedEventId, uri ?? ""],
     value: valueWei,
   });
 

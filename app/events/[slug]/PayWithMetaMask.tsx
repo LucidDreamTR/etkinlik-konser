@@ -195,13 +195,11 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
       case 'SalesPaused':
         return { code: 'SALES_PAUSED', message: 'Satışlar geçici olarak durduruldu.' };
       case 'InvalidPayment':
-        return { code: 'INVALID_PAYMENT', message: 'Ödeme tutarı geçersiz.' };
-      case 'MissingEventConfig':
-        return { code: 'MISSING_EVENT_CONFIG', message: 'Etkinlik ayarı bulunamadı.' };
-      case 'SoldOut':
-        return { code: 'SOLD_OUT', message: 'Biletler tükendi.' };
+        return { code: 'INVALID_PAYMENT', message: 'Ödeme tutarı hatalı.' };
       case 'SplitNotFound':
         return { code: 'SPLIT_NOT_FOUND', message: 'Bu etkinlik için ödeme dağıtım ayarı bulunamadı.' };
+      case 'OwnableUnauthorizedAccount':
+        return { code: 'OWNABLE_UNAUTHORIZED', message: 'Kontrat yetkisi hatalı (yapılandırma).' };
       default:
         break;
     }

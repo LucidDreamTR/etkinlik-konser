@@ -5,8 +5,8 @@ export const EVENTS = [
     slug: "rock-gecesi-istanbul",
     planId: "rock-gecesi-istanbul",
     splitId: buildSplitId("rock-gecesi-istanbul"),
-    priceWei: "100000000000000000", // 0.1 ETH
-    maxSupply: 1000,
+    priceWei: "100000000000000000", // backend-controlled
+    maxSupply: 1000, // backend-controlled
     paused: false,
     baseURI: "ipfs://tickets/rock-gecesi-istanbul/",
     title: "Rock Gecesi",
@@ -25,8 +25,8 @@ export const EVENTS = [
     slug: "elektronik-gece",
     planId: "elektronik-gece",
     splitId: buildSplitId("elektronik-gece"),
-    priceWei: "150000000000000000", // 0.15 ETH
-    maxSupply: 750,
+    priceWei: "150000000000000000", // backend-controlled
+    maxSupply: 750, // backend-controlled
     paused: false,
     baseURI: "ipfs://tickets/elektronik-gece/",
     title: "Elektronik Gece",

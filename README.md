@@ -22,7 +22,7 @@ This project uses system font stacks for both sans and mono text, so builds work
 
 ## Payments troubleshooting
 
-If you see `MissingEventConfig` from `/api/payments/fake-pay` or `/api/payments/webhook`, check the RPC URL and sale address logs from `src/server/onchainPurchase.ts` first.
+TicketSale zincirde event konfigürasyonu tutmaz. Event durumu ve fiyat doğrulaması backend tarafındadır; zincir sadece ödeme ve replay kontrolü yapar.
 
 ## Local seeding
 
