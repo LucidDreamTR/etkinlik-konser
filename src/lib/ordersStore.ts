@@ -45,7 +45,9 @@ async function readStore(): Promise<PaymentOrder[]> {
 
 async function writeStore(orders: PaymentOrder[]): Promise<void> {
   await fs.mkdir(path.dirname(STORE_PATH), { recursive: true });
-  await fs.writeFile(STORE_PATH, JSON.stringify(orders, null, 2) + "\n", "utf8");
+  const tmpPath = `${STORE_PATH}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(orders, null, 2) + "\n", "utf8");
+  await fs.rename(tmpPath, STORE_PATH);
 }
 
 export async function getOrderByMerchantId(merchantOrderId: string): Promise<PaymentOrder | undefined> {

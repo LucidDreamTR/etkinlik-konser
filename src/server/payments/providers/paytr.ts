@@ -11,6 +11,9 @@ export type ProviderVerifyResult =
       merchantOrderId: string;
       status: string;
       amountTry: string;
+      totalAmount: string;
+      paymentAmount?: string;
+      merchantId?: string;
       buyerAddress?: string | null;
       raw: Record<string, string>;
     }
@@ -81,6 +84,11 @@ export function verifyAndParsePaytr({ rawBody, env }: VerifyArgs): ProviderVerif
 
   const status = rawStatus.toLowerCase();
   const amountTry = raw.total_amount;
+  const paymentAmount = raw.payment_amount || undefined;
+  const merchantId = raw.merchant_id || undefined;
+  if (merchantId && env.PAYTR_MERCHANT_ID && merchantId !== env.PAYTR_MERCHANT_ID) {
+    return { ok: false, reason: "Invalid merchant_id" };
+  }
   const buyerAddress = raw.buyerAddress || raw.buyer_address || null;
 
   return {
@@ -88,6 +96,9 @@ export function verifyAndParsePaytr({ rawBody, env }: VerifyArgs): ProviderVerif
     merchantOrderId,
     status,
     amountTry,
+    totalAmount,
+    paymentAmount,
+    merchantId,
     buyerAddress,
     raw,
   };

@@ -10,7 +10,7 @@ function hashSplitId(value: string) {
 }
 
 export async function GET(request: Request) {
-  if (process.env.ENABLE_DEBUG_ROUTES !== "true") {
+  if (process.env.NODE_ENV !== "development" || process.env.ENABLE_SPLIT_DEBUG !== "1") {
     return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
   }
 

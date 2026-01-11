@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { recordOrderStatus } from "@/src/lib/ordersStore";
+import { getOrderByMerchantId, recordOrderStatus } from "@/src/lib/ordersStore";
 import { validateServerEnv } from "@/src/server/env";
 import { processPayment } from "@/src/server/payments";
 import { verifyAndParse } from "@/src/server/payments/providers";
@@ -39,13 +39,31 @@ export async function POST(request: Request) {
   }
 
   try {
+    const existing = await getOrderByMerchantId(verification.merchantOrderId);
+    if (existing) {
+      if (existing.payment_status === "paid" || existing.claimStatus === "claimed") {
+        return NextResponse.json({ ok: true, status: "duplicate" });
+      }
+      if (existing.amountTry && String(existing.amountTry) !== String(verification.totalAmount)) {
+        await recordOrderStatus({
+          merchantOrderId: verification.merchantOrderId,
+          eventId: String(eventId),
+          splitSlug,
+          buyerAddress: verification.buyerAddress ?? null,
+          amountTry: String(verification.totalAmount),
+          payment_status: "amount_mismatch",
+        });
+        return NextResponse.json({ ok: false, error: "Amount mismatch" }, { status: 400 });
+      }
+    }
+
     if (verification.status !== "success") {
       await recordOrderStatus({
         merchantOrderId: verification.merchantOrderId,
         eventId: String(eventId),
         splitSlug,
         buyerAddress: verification.buyerAddress ?? null,
-        amountTry: String(verification.amountTry),
+        amountTry: String(verification.totalAmount),
         payment_status: verification.status,
       });
 
@@ -58,7 +76,7 @@ export async function POST(request: Request) {
         eventId,
         splitSlug,
         buyerAddress: verification.buyerAddress ?? null,
-        amountTry: verification.amountTry,
+        amountTry: verification.totalAmount,
       },
       { allowPendingToProcess: true }
     );
