@@ -1,0 +1,201 @@
+"use client";
+
+import * as React from "react";
+import { createWalletClient, custom, getAddress } from "viem";
+
+import { getExplorerTxUrl } from "@/lib/explorer";
+
+type Props = {
+  eventId: number;
+  splitSlug: string;
+  amountWei: string;
+};
+
+type IntentPayload = {
+  buyer: `0x${string}`;
+  splitSlug: string;
+  merchantOrderId: string;
+  eventId: string;
+  amountWei: string;
+  deadline: string;
+};
+
+const INTENT_TYPES = {
+  TicketIntent: [
+    { name: "buyer", type: "address" },
+    { name: "splitSlug", type: "string" },
+    { name: "merchantOrderId", type: "string" },
+    { name: "eventId", type: "uint256" },
+    { name: "amountWei", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+  ],
+} as const;
+
+const EXPECTED_CHAIN_ID = 11155111 as const;
+
+export default function MetaMaskPurchase({ eventId, splitSlug, amountWei }: Props) {
+  const [hasMetaMask, setHasMetaMask] = React.useState(false);
+  const [account, setAccount] = React.useState<`0x${string}` | null>(null);
+  const [status, setStatus] = React.useState<"idle" | "signing" | "purchasing" | "success" | "error">("idle");
+  const [error, setError] = React.useState<string | null>(null);
+  const [txHash, setTxHash] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setHasMetaMask(typeof window !== "undefined" && Boolean((window as { ethereum?: unknown }).ethereum));
+  }, []);
+
+  const connectWallet = React.useCallback(async () => {
+    setError(null);
+    if (typeof window === "undefined" || !(window as { ethereum?: unknown }).ethereum) {
+      setError("MetaMask bulunamadı.");
+      return;
+    }
+    const ethereum = (window as { ethereum: unknown }).ethereum;
+    const client = createWalletClient({ transport: custom(ethereum) });
+    const accounts = await client.requestAddresses();
+    if (!accounts?.length) {
+      setError("Cüzdan adresi alınamadı.");
+      return;
+    }
+    setAccount(getAddress(accounts[0]));
+  }, []);
+
+  const purchase = React.useCallback(async () => {
+    setError(null);
+    setTxHash(null);
+    if (!account) {
+      setError("Önce cüzdanı bağlayın.");
+      return;
+    }
+    if (!splitSlug.trim()) {
+      setError("splitSlug bulunamadı.");
+      return;
+    }
+    const contractAddress = process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS ?? "";
+    if (!contractAddress) {
+      setError("TICKET_CONTRACT / verifying contract missing.");
+      return;
+    }
+    if (typeof window === "undefined" || !(window as { ethereum?: unknown }).ethereum) {
+      setError("MetaMask bulunamadı.");
+      return;
+    }
+
+    const ethereum = (window as { ethereum: unknown }).ethereum;
+    const client = createWalletClient({ transport: custom(ethereum) });
+    const chainIdHex = await client.request({ method: "eth_chainId" });
+    if (typeof chainIdHex !== "string") {
+      setError("Unable to detect network.");
+      return;
+    }
+
+    const connectedChainId = Number(chainIdHex);
+    if (connectedChainId !== EXPECTED_CHAIN_ID) {
+      setError(`Yanlış ağ bağlı. MetaMask: ${connectedChainId}, Beklenen: ${EXPECTED_CHAIN_ID}`);
+      return;
+    }
+
+    const merchantOrderId = globalThis.crypto?.randomUUID?.() ?? `order-${Date.now()}`;
+    const deadline = Math.floor(Date.now() / 1000) + 10 * 60;
+    const intent: IntentPayload = {
+      buyer: account,
+      splitSlug,
+      merchantOrderId,
+      eventId: String(eventId),
+      amountWei: String(amountWei),
+      deadline: String(deadline),
+    };
+
+    setStatus("signing");
+    const initRes = await fetch("/api/tickets/intent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ intent }),
+    });
+    const initJson = (await initRes.json()) as { ok?: boolean; error?: string };
+    if (!initRes.ok || !initJson.ok) {
+      setStatus("error");
+      setError(initJson.error ?? "Intent oluşturulamadı.");
+      return;
+    }
+
+    const signature = await client.signTypedData({
+      account,
+      domain: {
+        name: "EtkinlikKonser",
+        version: "1",
+        chainId: EXPECTED_CHAIN_ID,
+        verifyingContract: contractAddress as `0x${string}`,
+      },
+      types: INTENT_TYPES,
+      primaryType: "TicketIntent",
+      message: {
+        buyer: account,
+        splitSlug: intent.splitSlug,
+        merchantOrderId: intent.merchantOrderId,
+        eventId: BigInt(intent.eventId),
+        amountWei: BigInt(intent.amountWei),
+        deadline: BigInt(intent.deadline),
+      },
+    });
+
+    setStatus("purchasing");
+    const purchaseRes = await fetch("/api/tickets/purchase", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ intent, signature }),
+    });
+    const purchaseJson = (await purchaseRes.json()) as { ok?: boolean; txHash?: string; error?: string };
+    if (!purchaseRes.ok || !purchaseJson.ok) {
+      setStatus("error");
+      setError(purchaseJson.error ?? "Satın alma başarısız.");
+      return;
+    }
+    setTxHash(purchaseJson.txHash ?? null);
+    setStatus("success");
+  }, [account, amountWei, eventId, splitSlug]);
+
+  const isBusy = status === "signing" || status === "purchasing";
+  const explorerUrl = txHash ? getExplorerTxUrl(EXPECTED_CHAIN_ID, txHash) : null;
+
+  return (
+    <div className="mt-8 rounded-3xl border border-white/10 bg-white/5 p-6">
+      <h3 className="text-lg font-semibold">Buy with MetaMask</h3>
+      <p className="mt-2 text-sm text-white/60">Intent → imza → zincirde mint.</p>
+
+      {!hasMetaMask ? (
+        <div className="mt-4 text-sm text-amber-200">MetaMask yüklü değil.</div>
+      ) : (
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button
+            className="rounded-full border border-white/20 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
+            onClick={connectWallet}
+            disabled={isBusy}
+          >
+            {account ? `Bağlandı: ${account.slice(0, 6)}...${account.slice(-4)}` : "Cüzdanı bağla"}
+          </button>
+
+          <button
+            className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
+            onClick={purchase}
+            disabled={isBusy || !account}
+          >
+            {status === "signing" ? "Signing…" : status === "purchasing" ? "Purchasing…" : "Buy with MetaMask"}
+          </button>
+        </div>
+      )}
+
+      {error ? <div className="mt-3 text-sm text-rose-300">{error}</div> : null}
+      {status === "success" ? (
+        <div className="mt-3 text-sm text-emerald-300">
+          Success{txHash ? ` — ${txHash.slice(0, 10)}...` : ""}{" "}
+          {explorerUrl ? (
+            <a className="underline" href={explorerUrl} target="_blank" rel="noreferrer">
+              Explorer
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
