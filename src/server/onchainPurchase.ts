@@ -1,50 +1,24 @@
-import {
-  createPublicClient,
-  createWalletClient,
-  getAddress,
-  http,
-  keccak256,
-  parseEventLogs,
-  toBytes,
-  type Hex,
-} from "viem";
+import { createPublicClient, createWalletClient, getAddress, http, parseEventLogs, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { normalizeSplitSlug } from "@/lib/events";
-import { ticketSaleAbi } from "@/src/contracts/ticketSale.abi";
-import { ticketNftAbi } from "@/src/contracts/ticketNft.abi";
-import { requireAddressEnv, requireEnv, validateServerEnv } from "@/src/server/env";
+import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
+import { requireEnv, validateServerEnv } from "@/src/server/env";
 
-const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? process.env.RPC_URL ?? "http://127.0.0.1:8545";
+const RPC_URL = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8545";
 
 type PurchaseArgs = {
-  merchantOrderId: string;
+  orderId: `0x${string}`;
   splitSlug: string;
   eventId: string | number | bigint;
   amountTry?: string;
   amountWei?: string | number | bigint;
   buyerAddress?: string | null;
-  ticketSaleAddress?: string;
   uri?: string;
 };
 
 function isBytes32Hex(value: string): value is Hex {
   return /^0x[0-9a-fA-F]{64}$/.test(value);
-}
-
-function hashId(value: string): Hex {
-  const trimmed = value.trim();
-  if (!trimmed) throw new Error("ID boş olamaz");
-  if (isBytes32Hex(trimmed)) return trimmed;
-  return keccak256(toBytes(trimmed));
-}
-
-function normalizeAmountWei(amountWei: PurchaseArgs["amountWei"]): bigint | null {
-  if (amountWei === undefined || amountWei === null) return null;
-  if (typeof amountWei === "bigint") return amountWei;
-  if (typeof amountWei === "number") return BigInt(amountWei);
-  if (typeof amountWei === "string") return BigInt(amountWei);
-  return null;
 }
 
 function normalizeEventId(eventId: PurchaseArgs["eventId"]): bigint {
@@ -55,78 +29,95 @@ function normalizeEventId(eventId: PurchaseArgs["eventId"]): bigint {
 }
 
 export async function purchaseOnchain({
-  merchantOrderId,
+  orderId,
   splitSlug,
   eventId,
-  amountTry: _amountTry,
-  amountWei,
   buyerAddress: _buyerAddress,
-  ticketSaleAddress,
   uri,
-}: PurchaseArgs): Promise<{ txHash: Hex; tokenId: string; nftAddress: `0x${string}` }> {
+}: PurchaseArgs): Promise<
+  | { alreadyUsed: true }
+  | { alreadyUsed?: false; txHash: Hex; tokenId: string; nftAddress: `0x${string}` }
+> {
   validateServerEnv();
   if (process.env.NODE_ENV !== "production") {
     console.log(
       "[onchainPurchase] env",
-      `TICKET_SALE_ADDRESS=${process.env.TICKET_SALE_ADDRESS ?? ""}`,
-      `NEXT_PUBLIC_TICKET_SALE_ADDRESS=${process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS ?? ""}`,
+      `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS=${process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS ?? ""}`,
       `NEXT_PUBLIC_RPC_URL=${process.env.NEXT_PUBLIC_RPC_URL ?? ""}`,
       `RPC_URL=${process.env.RPC_URL ?? ""}`
     );
   }
 
-  const privateKeyRaw = requireEnv("RELAYER_PRIVATE_KEY");
+  const privateKeyRaw = requireEnv("BACKEND_WALLET_PRIVATE_KEY");
   const privateKey = (privateKeyRaw.startsWith("0x") ? privateKeyRaw : `0x${privateKeyRaw}`) as `0x${string}`;
-  const saleRaw =
-    ticketSaleAddress ?? process.env.TICKET_SALE_ADDRESS ?? process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS;
-  let ticketSaleAddressResolved: `0x${string}`;
+  const backendAccount = privateKeyToAccount(privateKey);
+  const contractRaw = process.env.TICKET_CONTRACT_ADDRESS ?? process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS;
+  let nftAddress: `0x${string}`;
   try {
-    ticketSaleAddressResolved = getAddress(String(saleRaw || ""));
+    nftAddress = getAddress(String(contractRaw || ""));
   } catch {
-    throw new Error(`Invalid ticketSaleAddress: ${String(saleRaw)}`);
+    throw new Error(`Invalid eventTicketAddress: ${String(contractRaw)}`);
   }
-  const nftAddress = requireAddressEnv("NEXT_PUBLIC_TICKET_NFT_ADDRESS");
 
-  const account = privateKeyToAccount(privateKey);
+  const backendAddress = process.env.BACKEND_WALLET_ADDRESS;
+  if (process.env.NODE_ENV !== "production" && backendAddress) {
+    try {
+      if (getAddress(backendAddress) !== backendAccount.address) {
+        console.warn("[onchainPurchase] BACKEND_WALLET_ADDRESS mismatch", {
+          env: backendAddress,
+          derived: backendAccount.address,
+        });
+      }
+    } catch {
+      console.warn("[onchainPurchase] BACKEND_WALLET_ADDRESS invalid", backendAddress);
+    }
+  }
+  if (
+    process.env.NODE_ENV !== "production" &&
+    RPC_URL.includes("127.0.0.1:8545") &&
+    process.env.NEXT_PUBLIC_CHAIN_ID === "11155111"
+  ) {
+    console.warn("[onchainPurchase] RPC_URL points to localhost while chain is Sepolia", RPC_URL);
+  }
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[onchainPurchase] backend", backendAccount.address, "contract", nftAddress);
+  }
   const publicClient = createPublicClient({ transport: http(RPC_URL) });
-  const walletClient = createWalletClient({ account, transport: http(RPC_URL) });
+  const walletClient = createWalletClient({ account: backendAccount, transport: http(RPC_URL) });
   const normalizedEventId = normalizeEventId(eventId);
   const normalizedSplit = normalizeSplitSlug(splitSlug);
-  const valueWei = normalizeAmountWei(amountWei);
-  if (valueWei === null) {
-    throw new Error("Missing amountWei");
+  if (!isBytes32Hex(orderId)) {
+    throw new Error("Invalid orderId");
   }
-  const isPaused = await publicClient.readContract({
-    address: ticketSaleAddressResolved,
-    abi: ticketSaleAbi,
-    functionName: "paused",
-  });
-  if (isPaused) {
-    throw new Error("SalesPaused");
+
+  const paymentId = orderId;
+  const tokenUri = uri?.trim();
+  if (!tokenUri) {
+    throw new Error("Missing token URI");
   }
-  const isUsed = await publicClient.readContract({
-    address: ticketSaleAddressResolved,
-    abi: ticketSaleAbi,
-    functionName: "usedOrderIds",
-    args: [hashId(merchantOrderId)],
-  });
-  if (isUsed) {
-    throw new Error("OrderUsed");
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[onchainPurchase] mint.request", {
+      eventId: normalizedEventId.toString(),
+      splitSlug: normalizedSplit,
+    });
   }
 
   const { request } = await publicClient.simulateContract({
-    account,
-    address: ticketSaleAddressResolved,
-    abi: ticketSaleAbi,
-    functionName: "purchase",
-    args: [hashId(normalizedSplit), hashId(merchantOrderId), normalizedEventId, uri ?? ""],
-    value: valueWei,
+    account: backendAccount,
+    address: nftAddress,
+    abi: eventTicketAbi,
+    functionName: "safeMint",
+    args: [_buyerAddress ?? backendAccount.address, tokenUri, normalizedEventId, paymentId],
   });
 
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[mint] rpc", RPC_URL, "backend", backendAccount.address, "contract", nftAddress);
+  }
   const txHash = await walletClient.writeContract(request);
   const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
   const logs = receipt.logs.filter((log) => getAddress(log.address) === nftAddress);
-  const parsed = parseEventLogs({ abi: ticketNftAbi, eventName: "Transfer", logs });
+  const parsed = parseEventLogs({ abi: eventTicketAbi, eventName: "Transfer", logs });
   const minted = parsed.find((entry) => entry.args.from === "0x0000000000000000000000000000000000000000");
 
   if (!minted) {
