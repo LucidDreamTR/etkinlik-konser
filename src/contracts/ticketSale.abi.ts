@@ -16,23 +16,18 @@ export const ticketSaleAbi = [
   },
   {
     type: "error",
-    name: "OnlyRelayer",
-    inputs: [],
+    name: "OwnableInvalidOwner",
+    inputs: [{ name: "owner", type: "address", internalType: "address" }],
   },
   {
     type: "error",
-    name: "MissingEventConfig",
-    inputs: [],
+    name: "OwnableUnauthorizedAccount",
+    inputs: [{ name: "account", type: "address", internalType: "address" }],
   },
   {
     type: "error",
-    name: "SoldOut",
+    name: "ReentrancyGuardReentrantCall",
     inputs: [],
-  },
-  {
-    type: "error",
-    name: "ERC721InvalidReceiver",
-    inputs: [{ name: "receiver", type: "address" }],
   },
   {
     type: "function",
@@ -48,42 +43,16 @@ export const ticketSaleAbi = [
   },
   {
     type: "function",
-    name: "purchaseFor",
-    stateMutability: "payable",
-    inputs: [
-      { name: "buyer", type: "address", internalType: "address" },
-      { name: "splitId", type: "bytes32", internalType: "bytes32" },
-      { name: "orderId", type: "bytes32", internalType: "bytes32" },
-      { name: "eventId", type: "uint256", internalType: "uint256" },
-      { name: "uri", type: "string", internalType: "string" },
-    ],
-    outputs: [],
-  },
-  {
-    type: "function",
-    name: "eventConfigs",
-    stateMutability: "view",
-    inputs: [{ name: "", type: "uint256", internalType: "uint256" }],
-    outputs: [
-      { name: "priceWei", type: "uint256", internalType: "uint256" },
-      { name: "maxSupply", type: "uint256", internalType: "uint256" },
-      { name: "paused", type: "bool", internalType: "bool" },
-      { name: "minted", type: "uint256", internalType: "uint256" },
-      { name: "exists", type: "bool", internalType: "bool" },
-    ],
-  },
-  {
-    type: "function",
-    name: "relayer",
+    name: "paused",
     stateMutability: "view",
     inputs: [],
-    outputs: [{ name: "", type: "address", internalType: "address" }],
+    outputs: [{ name: "", type: "bool", internalType: "bool" }],
   },
   {
     type: "function",
-    name: "setRelayer",
+    name: "setPaused",
     stateMutability: "nonpayable",
-    inputs: [{ name: "newRelayer", type: "address", internalType: "address" }],
+    inputs: [{ name: "value", type: "bool", internalType: "bool" }],
     outputs: [],
   },
   {
@@ -93,9 +62,39 @@ export const ticketSaleAbi = [
     inputs: [{ name: "", type: "bytes32", internalType: "bytes32" }],
     outputs: [{ name: "", type: "bool", internalType: "bool" }],
   },
+  {
+    type: "function",
+    name: "distributor",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address", internalType: "contract PayoutDistributor" }],
+  },
+  {
+    type: "function",
+    name: "ticket",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address", internalType: "contract TicketNFT" }],
+  },
+  {
+    type: "function",
+    name: "owner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address", internalType: "address" }],
+  },
+  {
+    type: "function",
+    name: "transferOwnership",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "newOwner", type: "address", internalType: "address" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "renounceOwnership",
+    stateMutability: "nonpayable",
+    inputs: [],
+    outputs: [],
+  },
 ] as const;
-
-const hasEventConfigs = ticketSaleAbi.some((entry) => entry.type === "function" && entry.name === "eventConfigs");
-if (!hasEventConfigs) {
-  throw new Error("ticketSaleAbi missing eventConfigs");
-}

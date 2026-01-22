@@ -18,7 +18,13 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const splitSlug = searchParams.get("splitSlug")?.trim() || "";
   if (!splitSlug) {
-    return NextResponse.json({ ok: false, error: "Missing splitSlug" }, { status: 400 });
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Provide splitSlug query param. For order debug use /api/debug/order?merchantOrderId=...",
+      },
+      { status: 400 }
+    );
   }
 
   const distributorRaw =

@@ -25,8 +25,6 @@ async function main() {
     { account: platform.address, bps: 1000 },
   ]);
 
-  await sale.setEventConfig(1, hre.ethers.parseEther("0.01"), 1000, false);
-
   console.log(`NEXT_PUBLIC_PAYOUT_DISTRIBUTOR_ADDRESS=${await distributor.getAddress()}`);
   console.log(`NEXT_PUBLIC_TICKET_NFT_ADDRESS=${await ticket.getAddress()}`);
   console.log(`NEXT_PUBLIC_TICKET_SALE_ADDRESS=${await sale.getAddress()}`);

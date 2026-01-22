@@ -6,9 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "init:splits": "node scripts/init-local-splits.mjs"
   },
   "dependencies": {
+    "@openzeppelin/contracts": "^5.4.0",
     "@tanstack/react-query": "^5.90.12",
     "next": "16.0.10",
     "react": "19.2.1",

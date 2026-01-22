@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { BaseError, ContractFunctionRevertedError, Hex, decodeErrorResult, decodeFunctionData, getAddress, parseEventLogs, zeroAddress, type Hash } from 'viem'
+import { BaseError, ContractFunctionRevertedError, Hex, decodeErrorResult, decodeFunctionData, encodeFunctionData, getAddress, parseEventLogs, zeroAddress, type Hash } from 'viem'
 import { useAccount, useChainId, useConnect, usePublicClient, useSwitchChain, useWaitForTransactionReceipt, useWalletClient } from 'wagmi'
 import { injected } from 'wagmi/connectors'
 import { payoutDistributorAbi } from '@/src/contracts/payoutDistributor.abi'
@@ -40,8 +40,8 @@ export default function PayWithMetaMask({ to, value, data, splitId, orderId, cha
   const [estimatedGas, setEstimatedGas] = React.useState<bigint | null>(null)
   const [estimatedMaxFee, setEstimatedMaxFee] = React.useState<bigint | null>(null)
   const [activeOrderId, setActiveOrderId] = React.useState<string | null>(null)
-  const [orderStableMode, setOrderStableMode] = React.useState(false)
-  const [uniqueOrderId, setUniqueOrderId] = React.useState(() => `${orderId}-${Date.now()}`)
+  const [paymentIntentId, setPaymentIntentId] = React.useState<string | null>(null)
+  const [serverOrderId, setServerOrderId] = React.useState<string>(orderId)
   const [splitPreview, setSplitPreview] = React.useState<{ account: string; bps: number }[] | null>(null)
   const [splitTotalBps, setSplitTotalBps] = React.useState<number | null>(null)
   const [splitError, setSplitError] = React.useState<string | null>(null)
@@ -133,25 +133,18 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
     });
   }, [data, decodedCalldata, orderId, splitId, to, value]);
 
-  React.useEffect(() => {
-    setUniqueOrderId(`${orderId}-${Date.now()}`);
-  }, [orderId]);
-
-  React.useEffect(() => {
-    if (!orderStableMode) {
-      setUniqueOrderId(`${orderId}-${Date.now()}`);
-    }
-  }, [orderStableMode, orderId]);
-
-  const effectiveOrderId = orderStableMode ? orderId : uniqueOrderId;
+  const bytes32Regex = React.useMemo(() => /^0x[0-9a-fA-F]{64}$/, []);
 
   const purchaseArgs = React.useMemo(() => {
     if (!decodedCalldata || decodedCalldata.functionName !== 'purchase' || !decodedCalldata.args || decodedCalldata.args.length < 4) {
       return null;
     }
     const [, , eventId, uri] = decodedCalldata.args;
-    return [hashId(splitId), hashId(effectiveOrderId), eventId, uri] as const;
-  }, [decodedCalldata, effectiveOrderId, splitId]);
+    if (!bytes32Regex.test(serverOrderId)) {
+      return null;
+    }
+    return [hashId(splitId), serverOrderId as `0x${string}`, eventId, uri] as const;
+  }, [bytes32Regex, decodedCalldata, serverOrderId, splitId]);
 
   const intentEventId = React.useMemo(() => {
     if (!decodedCalldata || !decodedCalldata.args || decodedCalldata.args.length < 3) return null;
@@ -177,11 +170,14 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
     const decoded = (() => {
       if (!(err instanceof BaseError)) return null;
       const revertError = err.walk((e) => e instanceof ContractFunctionRevertedError);
-      if (!revertError || !revertError.data) return null;
+      if (!revertError || !(revertError instanceof ContractFunctionRevertedError)) return null;
+      // viem narrows `data` on ContractFunctionRevertedError; walk() can widen it.
+      const data = (revertError as unknown as { data?: `0x${string}` }).data;
+      if (!data) return null;
       try {
         const decodedError = decodeErrorResult({
           abi: [...ticketSaleAbi, ...payoutDistributorAbi],
-          data: revertError.data,
+          data,
         });
         return decodedError.errorName;
       } catch {
@@ -195,13 +191,11 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
       case 'SalesPaused':
         return { code: 'SALES_PAUSED', message: 'Satışlar geçici olarak durduruldu.' };
       case 'InvalidPayment':
-        return { code: 'INVALID_PAYMENT', message: 'Ödeme tutarı geçersiz.' };
-      case 'MissingEventConfig':
-        return { code: 'MISSING_EVENT_CONFIG', message: 'Etkinlik ayarı bulunamadı.' };
-      case 'SoldOut':
-        return { code: 'SOLD_OUT', message: 'Biletler tükendi.' };
+        return { code: 'INVALID_PAYMENT', message: 'Ödeme tutarı hatalı.' };
       case 'SplitNotFound':
         return { code: 'SPLIT_NOT_FOUND', message: 'Bu etkinlik için ödeme dağıtım ayarı bulunamadı.' };
+      case 'OwnableUnauthorizedAccount':
+        return { code: 'OWNABLE_UNAUTHORIZED', message: 'Kontrat yetkisi hatalı (yapılandırma).' };
       default:
         break;
     }
@@ -214,13 +208,60 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
   };
 
   const logGuard = (reason: string) => {
-    const idsPresent = Boolean(splitId.trim() && effectiveOrderId.trim());
+    const idsPresent = Boolean(splitId.trim() && serverOrderId.trim());
     console.warn('[pay guard]', { reason, chainId: targetChainId, to, value, hasIds: idsPresent, TX_ENABLED: TICKET_TX_ENABLED });
   };
 
   const setError = (message: string, err?: unknown) => {
     setTxError(formatDevError(message, err));
   };
+
+  const createPaymentIntent = React.useCallback(async () => {
+    if (!address) {
+      throw new Error('Wallet not connected');
+    }
+    if (!intentEventId) {
+      throw new Error('EventId missing');
+    }
+    if (!splitId.trim() || ticketPriceWei <= 0n) {
+      throw new Error('Intent data missing');
+    }
+    const deadline = Math.floor(Date.now() / 1000) + 10 * 60;
+    const eventIdValue =
+      typeof intentEventId === 'bigint' ? intentEventId.toString() : String(intentEventId);
+    const intent = {
+      buyer: address,
+      splitSlug: splitId,
+      merchantOrderId: paymentIntentId ?? '',
+      eventId: eventIdValue,
+      amountWei: ticketPriceWei.toString(),
+      deadline: deadline.toString(),
+    } as const;
+
+    const response = await fetch('/api/tickets/intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intent }),
+    });
+    const text = await response.text();
+    let data: { ok?: boolean; error?: string; orderId?: string; paymentIntentId?: string };
+    try {
+      data = text ? JSON.parse(text) : { ok: false, error: 'Empty response body' };
+    } catch {
+      data = { ok: false, error: 'Invalid JSON response' };
+    }
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.error ?? 'Intent oluşturulamadı');
+    }
+    if (!data.orderId || !bytes32Regex.test(data.orderId)) {
+      throw new Error('Geçersiz orderId');
+    }
+    if (data.paymentIntentId) {
+      setPaymentIntentId(data.paymentIntentId);
+    }
+    setServerOrderId(data.orderId);
+    return { paymentIntentId: data.paymentIntentId ?? paymentIntentId ?? '', orderId: data.orderId };
+  }, [address, bytes32Regex, intentEventId, paymentIntentId, splitId, ticketPriceWei]);
 
   const onPayOrConnect = React.useCallback(async () => {
     if (!hasMetaMask) {
@@ -268,12 +309,26 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
       setError('Tutar 0’dan büyük olmalı.');
       return;
     }
-    if (!splitId.trim() || !effectiveOrderId.trim()) {
+    if (!splitId.trim()) {
       logGuard('missing_ids');
-      setError('Dağıtım kimliği ve işlem numarası gerekli.');
+      setError('Dağıtım kimliği gerekli.');
       return;
     }
-    if (activeOrderId === effectiveOrderId && (isSending || hash)) {
+    if (!bytes32Regex.test(serverOrderId)) {
+      try {
+        await createPaymentIntent();
+      } catch (err) {
+        const { message } = classifyError(err);
+        setError(message, err);
+        return;
+      }
+    }
+    if (!bytes32Regex.test(serverOrderId)) {
+      logGuard('missing_ids');
+      setError('İşlem numarası oluşturulamadı.');
+      return;
+    }
+    if (activeOrderId === serverOrderId && (isSending || hash)) {
       logGuard('duplicate_order');
       setError('Bu sipariş için işlem zaten beklemede.');
       return;
@@ -305,12 +360,15 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
         setError('Satın alma parametreleri hazırlanamadı.');
         return;
       }
-      gasEstimate = await publicClient.estimateGas({
-        account,
-        address: to,
+      const callData = encodeFunctionData({
         abi: ticketSaleAbi,
         functionName: 'purchase',
         args: purchaseArgs,
+      });
+      gasEstimate = await publicClient.estimateGas({
+        account,
+        to,
+        data: callData,
         value,
       });
       let maxFeePerGas: bigint | undefined;
@@ -337,7 +395,7 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
     }
 
     setIsSending(true);
-    setActiveOrderId(effectiveOrderId);
+    setActiveOrderId(serverOrderId);
     setTxStatus('pending');
     try {
       if (!to) {
@@ -345,7 +403,32 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
         setError('Ödeme modülü yapılandırılmadı (kontrat adresi eksik).');
         return;
       }
-      const feeParams = Object.keys(txFeeParams).length ? txFeeParams : feePerGas ?? {};
+      // ---- fee param normalization (do not mix legacy + eip1559) ----
+      type FeeParams =
+        | { gasPrice: bigint }
+        | { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }
+        | {};
+
+      const feeParams: FeeParams = (() => {
+        const t = txFeeParams ?? {};
+        const hasEip1559 = t.maxFeePerGas != null || t.maxPriorityFeePerGas != null;
+        const hasLegacy = t.gasPrice != null;
+
+        if (hasEip1559) {
+          const maxFeePerGas = t.maxFeePerGas ?? feePerGas?.maxFeePerGas;
+          const maxPriorityFeePerGas = t.maxPriorityFeePerGas ?? feePerGas?.maxPriorityFeePerGas;
+          if (maxFeePerGas && maxPriorityFeePerGas) return { maxFeePerGas, maxPriorityFeePerGas };
+          return {};
+        }
+
+        if (hasLegacy) return { gasPrice: t.gasPrice };
+
+        if (feePerGas?.maxFeePerGas && feePerGas?.maxPriorityFeePerGas) {
+          return { maxFeePerGas: feePerGas.maxFeePerGas, maxPriorityFeePerGas: feePerGas.maxPriorityFeePerGas };
+        }
+
+        return {};
+      })();
       const gasForSend = gasEstimate && gasEstimate < 200000n ? 500000n : undefined;
       const txHash = await walletClient.writeContract({
         account,
@@ -354,10 +437,8 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
         functionName: 'purchase',
         args: purchaseArgs ?? [],
         value,
-        gas: gasForSend,
-        maxFeePerGas: feeParams.maxFeePerGas,
-        maxPriorityFeePerGas: feeParams.maxPriorityFeePerGas,
-        gasPrice: feeParams.gasPrice,
+        ...(gasForSend ? { gas: gasForSend } : {}),
+        ...feeParams,
         chain: TICKET_SALE_CHAIN,
       });
       setHash(txHash);
@@ -368,31 +449,29 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
       setTxStatus('failed');
     } finally {
       setIsSending(false);
-      if (!orderStableMode) {
-        setUniqueOrderId(`${orderId}-${Date.now()}`);
-      }
     }
   }, [
     activeOrderId,
+    createPaymentIntent,
     connectMetaMask,
     data,
     decodedCalldata,
-    effectiveOrderId,
     hasMetaMask,
     hash,
     isConnected,
     isOnTargetChain,
     isSending,
     orderId,
-    orderStableMode,
     purchaseArgs,
     splitId,
+    serverOrderId,
     ticketPriceWei,
     to,
     value,
     walletClient,
     publicClient,
     feePerGas,
+    bytes32Regex,
   ])
 
   React.useEffect(() => {
@@ -500,7 +579,7 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
       setIntentError('İmza için gerekli veriler eksik.');
       return;
     }
-    if (!splitId.trim() || !effectiveOrderId.trim() || ticketPriceWei <= 0n) {
+    if (!splitId.trim() || ticketPriceWei <= 0n) {
       setIntentError('İmza için gerekli bilgiler eksik.');
       return;
     }
@@ -510,16 +589,22 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
     setIntentStatus('signing');
 
     try {
-      const deadline = Math.floor(Date.now() / 1000) + 10 * 60;
-      const eventIdValue =
-        typeof intentEventId === 'bigint' ? intentEventId.toString() : String(intentEventId);
+      const created = await createPaymentIntent();
       const intent = {
         buyer: address,
         splitSlug: splitId,
-        merchantOrderId: effectiveOrderId,
-        eventId: eventIdValue,
+        merchantOrderId: created.paymentIntentId,
+        eventId: typeof intentEventId === 'bigint' ? intentEventId.toString() : String(intentEventId),
         amountWei: ticketPriceWei.toString(),
-        deadline: deadline.toString(),
+        deadline: Math.floor(Date.now() / 1000) + 10 * 60,
+      } as const;
+      const typedMessage = {
+        buyer: intent.buyer,
+        splitSlug: intent.splitSlug,
+        merchantOrderId: intent.merchantOrderId,
+        eventId: BigInt(intent.eventId),
+        amountWei: BigInt(intent.amountWei),
+        deadline: BigInt(intent.deadline),
       } as const;
 
       if (!address) {
@@ -539,7 +624,7 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
           ],
         },
         primaryType: 'TicketIntent',
-        message: intent,
+        message: typedMessage,
       });
 
       setIntentStatus('sending');
@@ -570,17 +655,18 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
   }, [
     address,
     connectMetaMask,
-    effectiveOrderId,
+    createPaymentIntent,
     intentDomain,
     intentEventId,
     isConnected,
     splitId,
+    serverOrderId,
     ticketPriceWei,
     walletClient,
   ]);
 
   const requiresSwitch = isConnected && !isOnTargetChain
-  const hasIds = Boolean(splitId.trim() && orderId.trim())
+  const hasIds = Boolean(splitId.trim() && serverOrderId.trim() && bytes32Regex.test(serverOrderId))
   const isPayDisabled =
     !TICKET_TX_ENABLED ||
     !to ||
@@ -734,22 +820,20 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
     );
   }, []);
 
+  const err = (txError ?? receiptError ?? connectError) as unknown;
+  const errText =
+    typeof err === 'string'
+      ? err
+      : err && typeof err === 'object' && 'message' in err
+        ? String((err as { message?: unknown }).message ?? 'Unknown error')
+        : String(err ?? 'Unknown error');
+
   return (
     <div className="space-y-3">
-      {process.env.NODE_ENV === 'development' ? (
-        <label className="flex items-center gap-2 text-xs text-white/80">
-          <input
-            type="checkbox"
-            checked={orderStableMode}
-            onChange={(e) => setOrderStableMode(e.target.checked)}
-          />
-          OrderId Sabit (OrderUsed Test)
-        </label>
-      ) : null}
       <div className="rounded-xl border p-4">
         <div className="text-sm opacity-70 mb-2">İşlem verisi (önizleme)</div>
         <div className="text-sm break-all"><b>Hedef kontrat:</b> {to}</div>
-        <div className="text-sm break-all"><b>İşlem numarası:</b> {effectiveOrderId}</div>
+        <div className="text-sm break-all"><b>İşlem numarası:</b> {serverOrderId || "—"}</div>
         <div className="text-sm break-all"><b>Tutar (wei):</b> {value.toString()}</div>
         <div className="text-sm break-all"><b>İşlem talimatı:</b> {data}</div>
         {estimatedMaxFee !== null ? (
@@ -881,7 +965,7 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
                 rel="noreferrer"
                 href={mintResult.nftExplorerLink}
               >
-                Explorer'da görüntüle
+                Explorer&apos;da görüntüle
               </a>
             </>
           ) : mintError ? (
@@ -894,7 +978,7 @@ const [txStatus, setTxStatus] = React.useState<'idle' | 'pending' | 'success' | 
 
       {(txError || receiptError || connectError) && (
         <div className="rounded-xl border p-4 text-sm break-all">
-          <b>Hata:</b> {(txError ?? receiptError ?? connectError)?.message ?? txError}
+          <b>Hata:</b> {errText}
         </div>
       )}
 

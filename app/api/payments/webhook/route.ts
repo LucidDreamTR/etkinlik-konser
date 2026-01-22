@@ -4,6 +4,25 @@ import { getOrderByMerchantId, recordOrderStatus } from "@/src/lib/ordersStore";
 import { validateServerEnv } from "@/src/server/env";
 import { processPayment } from "@/src/server/payments";
 import { verifyAndParse } from "@/src/server/payments/providers";
+import { createRateLimiter } from "@/src/server/rateLimit";
+
+function okResponse() {
+  return new Response("OK", { status: 200 });
+}
+
+const webhookLimiter = createRateLimiter({ max: 120, windowMs: 60_000 });
+
+function asHex32(value?: string | null): `0x${string}` | undefined {
+  if (!value) return undefined;
+  if (/^0x[0-9a-fA-F]{64}$/.test(value)) return value as `0x${string}`;
+  return undefined;
+}
+
+function getClientIp(headers: Headers): string {
+  const forwarded = headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0]?.trim() || "unknown";
+  return headers.get("x-real-ip") || "unknown";
+}
 
 export async function POST(request: Request) {
   try {
@@ -14,7 +33,20 @@ export async function POST(request: Request) {
   }
 
   const rawBody = await request.text();
-  if (!process.env.PAYTR_MERCHANT_KEY || !process.env.PAYTR_MERCHANT_SALT) {
+  const strictSignature = process.env.PAYTR_STRICT_SIGNATURE === "true";
+  const rate = webhookLimiter(getClientIp(request.headers));
+  if (!rate.ok) {
+    const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
+    return NextResponse.json(
+      { ok: false, error: "Rate limit exceeded" },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } }
+    );
+  }
+  const paytrMode = (process.env.PAYTR_ENV ?? "test").toLowerCase();
+  const paytrSuffix = paytrMode === "prod" ? "PROD" : "TEST";
+  const merchantKey = process.env[`PAYTR_MERCHANT_KEY_${paytrSuffix}`] ?? process.env.PAYTR_MERCHANT_KEY;
+  const merchantSalt = process.env[`PAYTR_MERCHANT_SALT_${paytrSuffix}`] ?? process.env.PAYTR_MERCHANT_SALT;
+  if (!merchantKey || !merchantSalt) {
     return NextResponse.json(
       { ok: false, error: "Missing PAYTR_MERCHANT_KEY or PAYTR_MERCHANT_SALT" },
       { status: 400 }
@@ -24,6 +56,10 @@ export async function POST(request: Request) {
 
   if (!verification.ok) {
     const status = verification.reason === "Invalid signature" ? 401 : 400;
+    if (!strictSignature) {
+      console.warn("[paytr.webhook] verification failed", verification.reason);
+      return okResponse();
+    }
     return NextResponse.json({ ok: false, error: verification.reason }, { status });
   }
 
@@ -51,7 +87,7 @@ export async function POST(request: Request) {
           decision: "ignored",
           reason: "duplicate",
         });
-        return NextResponse.json({ ok: true, status: "duplicate" });
+        return okResponse();
       }
       if (existing.payment_status === "failed" && verification.status === "success") {
         console.log("[paytr.webhook]", {
@@ -63,13 +99,17 @@ export async function POST(request: Request) {
           decision: "ignored",
           reason: "success_after_failed",
         });
-        return NextResponse.json({ ok: true, status: "ignored" });
+        if (strictSignature) {
+          return NextResponse.json({ ok: true, status: "ignored" }, { status: 200 });
+        }
+        return okResponse();
       }
 
       const incomingAmount = verification.paymentAmount ?? verification.totalAmount;
       if (existing.amountTry && String(existing.amountTry) !== String(incomingAmount)) {
         await recordOrderStatus({
           merchantOrderId: verification.merchantOrderId,
+          orderId: existing?.orderId ?? null,
           eventId: String(eventId),
           splitSlug,
           buyerAddress: verification.buyerAddress ?? null,
@@ -85,7 +125,10 @@ export async function POST(request: Request) {
           decision: "flagged",
           reason: "amount_mismatch",
         });
-        return NextResponse.json({ ok: true, status: "flagged" });
+        if (strictSignature) {
+          return NextResponse.json({ ok: true, status: "flagged" }, { status: 200 });
+        }
+        return okResponse();
       }
     }
 
@@ -100,6 +143,7 @@ export async function POST(request: Request) {
       });
       await recordOrderStatus({
         merchantOrderId: verification.merchantOrderId,
+        orderId: existing?.orderId ?? null,
         eventId: String(eventId),
         splitSlug,
         buyerAddress: verification.buyerAddress ?? null,
@@ -107,12 +151,16 @@ export async function POST(request: Request) {
         payment_status: verification.status,
       });
 
-      return NextResponse.json({ ok: true, status: "recorded" });
+      if (strictSignature) {
+        return NextResponse.json({ ok: true, status: "recorded" }, { status: 200 });
+      }
+      return okResponse();
     }
 
     const result = await processPayment(
       {
         merchantOrderId: verification.merchantOrderId,
+        orderId: asHex32(existing?.orderId),
         eventId,
         splitSlug,
         buyerAddress: verification.buyerAddress ?? null,
@@ -130,7 +178,7 @@ export async function POST(request: Request) {
         new_state: result.status === "processed" ? "paid" : existing?.payment_status ?? "paid",
         decision: result.status === "processed" ? "processed" : "ignored",
       });
-      return NextResponse.json({ ok: true, status: result.status, ...(result.txHash ? { txHash: result.txHash } : {}) });
+      return okResponse();
     }
     console.log("[paytr.webhook]", {
       merchant_oid: verification.merchantOrderId,
@@ -141,7 +189,10 @@ export async function POST(request: Request) {
       decision: "ignored",
       reason: "pending",
     });
-    return NextResponse.json({ ok: true, status: "recorded", message: result.message });
+    if (strictSignature) {
+      return NextResponse.json({ ok: true, status: "recorded", message: result.message }, { status: 200 });
+    }
+    return okResponse();
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
