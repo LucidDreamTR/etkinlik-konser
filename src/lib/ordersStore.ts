@@ -29,8 +29,13 @@ export type PaymentOrder = {
 };
 
 const STORE_PATH = path.join(process.cwd(), "data", "orders.json");
+const isProd = process.env.NODE_ENV === "production";
+const inMemoryOrders: PaymentOrder[] = [];
 
 async function readStore(): Promise<PaymentOrder[]> {
+  if (isProd) {
+    return inMemoryOrders;
+  }
   try {
     const raw = await fs.readFile(STORE_PATH, "utf8");
     if (!raw.trim()) return [];
@@ -46,6 +51,12 @@ async function readStore(): Promise<PaymentOrder[]> {
 }
 
 async function writeStore(orders: PaymentOrder[]): Promise<void> {
+  if (isProd) {
+    // Vercel serverless filesystem is read-only.
+    inMemoryOrders.length = 0;
+    inMemoryOrders.push(...orders);
+    return;
+  }
   await fs.mkdir(path.dirname(STORE_PATH), { recursive: true });
   const tmpPath = `${STORE_PATH}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(orders, null, 2) + "\n", "utf8");
