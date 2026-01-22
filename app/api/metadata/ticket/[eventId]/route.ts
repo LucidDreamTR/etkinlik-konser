@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { EVENTS } from "@/data/events";
 
+export const dynamic = "force-dynamic";
+
 function escapeXml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -48,6 +50,18 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ eventId: string }> }
 ) {
+  if (request.nextUrl.searchParams.get("debug") === "1") {
+    return NextResponse.json({
+      ok: true,
+      env: {
+        ETHEREUM_RPC_URL: Boolean(process.env.ETHEREUM_RPC_URL),
+        NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL ?? null,
+        NODE_ENV: process.env.NODE_ENV,
+      },
+      runtime: "metadata-route",
+    });
+  }
+
   const { eventId } = await context.params;
   const fallbackId = new URL(request.url).pathname.split("/").pop() || "";
   const resolved = resolveEvent(eventId ?? fallbackId);
