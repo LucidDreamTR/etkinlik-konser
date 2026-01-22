@@ -3,6 +3,7 @@ import { getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { normalizeSplitSlug } from "@/lib/events";
+import { getPublicBaseUrl } from "@/lib/site";
 import { getOrderByMerchantId, recordPaidOrder } from "@/src/lib/ordersStore";
 import { computeOrderId } from "@/src/server/orderId";
 import { purchaseWithFiat } from "@/src/server/fiatPurchase";
@@ -87,7 +88,7 @@ export async function processPayment(
   // A placeholder for the metadata URI. In a real application, you would
   // generate this based on event details, possibly pointing to an API route
   // that serves EIP-721 compliant metadata.
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  const appUrl = getPublicBaseUrl();
   const tokenUri = `${appUrl}/api/metadata/ticket/${eventIdNormalized}`;
   if (process.env.NODE_ENV !== "production" && !tokenUri) {
     throw new Error("tokenUri missing");

@@ -99,6 +99,7 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 - `/api/payments/webhook` (PayTR signature)
 - `/api/tickets/intent` (EIP-712)
 - `/api/tickets/claim`
+- Verify mint tokenURI is `https://<domain>/api/metadata/ticket/<id>` (not localhost)
 
 ### On-chain checks (cast)
 - `cast call <sale> "paused()(bool)"`

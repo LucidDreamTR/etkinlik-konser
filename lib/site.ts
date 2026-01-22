@@ -1,16 +1,17 @@
 import { getAddress } from "viem";
 
 export function getPublicBaseUrl(): string {
-  const explicit = process.env.NEXT_PUBLIC_APP_URL?.trim();
-  if (explicit) return explicit.replace(/\/$/, "");
-
   const site = process.env.NEXT_PUBLIC_SITE_URL?.trim();
   if (site) return site.replace(/\/$/, "");
 
   const vercelUrl = process.env.VERCEL_URL?.trim();
   if (vercelUrl) return `https://${vercelUrl}`;
 
-  return "http://localhost:3000";
+  if (process.env.NODE_ENV !== "production") {
+    return "http://localhost:3000";
+  }
+
+  throw new Error("Missing public base URL (NEXT_PUBLIC_SITE_URL or VERCEL_URL)");
 }
 
 export function getMetadataBase(): URL {
