@@ -5,6 +5,7 @@ import { getAddress, verifyTypedData } from "viem";
 import { getOrderByMerchantId } from "@/src/lib/ordersStore";
 import { computeOrderId } from "@/src/server/orderId";
 import { createRateLimiter } from "@/src/server/rateLimit";
+import { getTicketContractAddress } from "@/lib/site";
 
 type TicketIntent = {
   buyer: string;
@@ -99,13 +100,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, status: "created", paymentIntentId, orderId });
     }
 
-    const vcRaw = process.env.TICKET_CONTRACT_ADDRESS ?? process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS;
     let verifyingContract: `0x${string}`;
     try {
-      verifyingContract = getAddress(String(vcRaw || ""));
+      verifyingContract = getTicketContractAddress({ server: true });
     } catch {
       return NextResponse.json(
-        { ok: false, error: "Invalid verifyingContract", verifyingContract: vcRaw ?? null },
+        { ok: false, error: "Invalid verifyingContract", verifyingContract: null },
         { status: 400 }
       );
     }
@@ -116,25 +116,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: "Intent expired" }, { status: 400 });
     }
 
-    let verifyingContractChecksum: `0x${string}`;
-    try {
-      verifyingContractChecksum = getAddress(String(verifyingContract));
-    } catch {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "Invalid verifyingContract before verifyTypedData",
-          verifyingContract: verifyingContract ?? null,
-        },
-        { status: 400 }
-      );
-    }
-
     const domain = {
       name: "EtkinlikKonser",
       version: "1",
       chainId: 11155111,
-      verifyingContract: verifyingContractChecksum,
+      verifyingContract,
     } as const;
 
     let buyerChecksumForMessage: `0x${string}`;

@@ -9,6 +9,8 @@ type Props = {
   eventId: number;
   splitSlug: string;
   amountWei: string;
+  ticketContractAddress: `0x${string}`;
+  expectedChainId: number;
 };
 
 type IntentPayload = {
@@ -35,9 +37,13 @@ const INTENT_TYPES = {
   ],
 } as const;
 
-const EXPECTED_CHAIN_ID = 11155111 as const;
-
-export default function MetaMaskPurchase({ eventId, splitSlug, amountWei }: Props) {
+export default function MetaMaskPurchase({
+  eventId,
+  splitSlug,
+  amountWei,
+  ticketContractAddress,
+  expectedChainId,
+}: Props) {
   const [hasMetaMask, setHasMetaMask] = React.useState(false);
   const [account, setAccount] = React.useState<`0x${string}` | null>(null);
   const [status, setStatus] = React.useState<"idle" | "signing" | "purchasing" | "success" | "error">("idle");
@@ -81,7 +87,7 @@ export default function MetaMaskPurchase({ eventId, splitSlug, amountWei }: Prop
       setError("splitSlug bulunamadı.");
       return;
     }
-    const contractAddress = process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS ?? "";
+    const contractAddress = ticketContractAddress;
     if (!contractAddress) {
       setError("TICKET_CONTRACT / verifying contract missing.");
       return;
@@ -104,8 +110,8 @@ export default function MetaMaskPurchase({ eventId, splitSlug, amountWei }: Prop
     }
 
     const connectedChainId = parseInt(chainIdHex, 16);
-    if (connectedChainId !== EXPECTED_CHAIN_ID) {
-      setError(`Yanlış ağ bağlı. MetaMask: ${connectedChainId}, Beklenen: ${EXPECTED_CHAIN_ID}`);
+    if (connectedChainId !== expectedChainId) {
+      setError(`Yanlış ağ bağlı. MetaMask: ${connectedChainId}, Beklenen: ${expectedChainId}`);
       return;
     }
 
@@ -138,7 +144,7 @@ export default function MetaMaskPurchase({ eventId, splitSlug, amountWei }: Prop
       domain: {
         name: "EtkinlikKonser",
         version: "1",
-        chainId: EXPECTED_CHAIN_ID,
+        chainId: expectedChainId,
         verifyingContract: contractAddress as `0x${string}`,
       },
       types: INTENT_TYPES,
@@ -167,10 +173,10 @@ export default function MetaMaskPurchase({ eventId, splitSlug, amountWei }: Prop
     }
     setTxHash(purchaseJson.txHash ?? null);
     setStatus("success");
-  }, [account, amountWei, eventId, splitSlug]);
+  }, [account, amountWei, eventId, expectedChainId, splitSlug, ticketContractAddress]);
 
   const isBusy = status === "signing" || status === "purchasing";
-  const explorerUrl = txHash ? getExplorerTxUrl(EXPECTED_CHAIN_ID, txHash) : null;
+  const explorerUrl = txHash ? getExplorerTxUrl(expectedChainId, txHash) : null;
 
   return (
     <div className="mt-8 rounded-3xl border border-white/10 bg-white/5 p-6">

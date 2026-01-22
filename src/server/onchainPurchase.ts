@@ -2,6 +2,7 @@ import { createPublicClient, createWalletClient, getAddress, http, parseEventLog
 import { privateKeyToAccount } from "viem/accounts";
 
 import { normalizeSplitSlug } from "@/lib/events";
+import { getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { requireEnv, validateServerEnv } from "@/src/server/env";
 
@@ -51,12 +52,12 @@ export async function purchaseOnchain({
   const privateKeyRaw = requireEnv("BACKEND_WALLET_PRIVATE_KEY");
   const privateKey = (privateKeyRaw.startsWith("0x") ? privateKeyRaw : `0x${privateKeyRaw}`) as `0x${string}`;
   const backendAccount = privateKeyToAccount(privateKey);
-  const contractRaw = process.env.TICKET_CONTRACT_ADDRESS ?? process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS;
   let nftAddress: `0x${string}`;
   try {
-    nftAddress = getAddress(String(contractRaw || ""));
-  } catch {
-    throw new Error(`Invalid eventTicketAddress: ${String(contractRaw)}`);
+    nftAddress = getTicketContractAddress({ server: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid eventTicketAddress";
+    throw new Error(message);
   }
 
   const backendAddress = process.env.BACKEND_WALLET_ADDRESS;

@@ -10,8 +10,9 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
+import { getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
-import { requireAddressEnv, requireEnv, validateServerEnv } from "@/src/server/env";
+import { requireEnv, validateServerEnv } from "@/src/server/env";
 
 const RPC_URL = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8545";
 
@@ -63,7 +64,7 @@ export async function purchaseWithFiat({
   const privateKey = (privateKeyRaw.startsWith("0x") ? privateKeyRaw : `0x${privateKeyRaw}`) as `0x${string}`;
   
   // The address of the new EventTicket contract
-  const nftAddress = requireAddressEnv("NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS");
+  const nftAddress = getTicketContractAddress({ server: true });
 
   const account = privateKeyToAccount(privateKey);
   const backendAddress = process.env.BACKEND_WALLET_ADDRESS;

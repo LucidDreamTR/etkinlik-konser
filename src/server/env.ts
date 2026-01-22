@@ -1,4 +1,5 @@
 import { getAddress } from "viem";
+import { getTicketContractAddress } from "@/lib/site";
 
 export function requireEnv(name: string): string {
   const value = process.env[name];
@@ -23,6 +24,6 @@ function requireAnyAddressEnv(names: string[]): `0x${string}` {
 }
 
 export function validateServerEnv(): void {
-  requireAnyAddressEnv(["TICKET_CONTRACT_ADDRESS", "NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS"]);
+  getTicketContractAddress({ server: true });
   requireEnv("BACKEND_WALLET_PRIVATE_KEY");
 }

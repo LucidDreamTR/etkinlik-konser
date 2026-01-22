@@ -1,17 +1,29 @@
-// lib/site.ts
-export function getMetadataBase(): URL {
-  // 1) Manuel tanımladığın domain (tercih)
-  const explicit = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-  if (explicit) return new URL(explicit);
+import { getAddress } from "viem";
 
-  // 2) Vercel prod domain (varsa)
-  const prodUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
-  if (prodUrl) return new URL(`https://${prodUrl}`);
+export function getPublicBaseUrl(): string {
+  const explicit = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (explicit) return explicit.replace(/\/$/, "");
 
-  // 3) Vercel deployment domain (her deploy’da olur)
+  const site = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (site) return site.replace(/\/$/, "");
+
   const vercelUrl = process.env.VERCEL_URL?.trim();
-  if (vercelUrl) return new URL(`https://${vercelUrl}`);
+  if (vercelUrl) return `https://${vercelUrl}`;
 
-  // 4) Lokal fallback
-  return new URL("http://localhost:3000");
+  return "http://localhost:3000";
+}
+
+export function getMetadataBase(): URL {
+  return new URL(getPublicBaseUrl());
+}
+
+export function getTicketContractAddress(options?: { server?: boolean }): `0x${string}` {
+  const publicValue = process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS?.trim();
+  const serverValue = options?.server ? process.env.TICKET_CONTRACT_ADDRESS?.trim() : undefined;
+  const raw = publicValue || serverValue;
+  if (!raw) {
+    throw new Error("Missing env: NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS");
+  }
+  const normalized = raw.startsWith("0x") ? raw : `0x${raw}`;
+  return getAddress(normalized);
 }

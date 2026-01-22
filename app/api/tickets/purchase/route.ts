@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAddress, verifyTypedData } from "viem";
 
+import { getTicketContractAddress } from "@/lib/site";
 import { getOrderByMerchantId, recordPaidOrder } from "@/src/lib/ordersStore";
 import { computeOrderId } from "@/src/server/orderId";
 import { purchaseOnchain } from "@/src/server/onchainPurchase";
@@ -84,13 +85,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const vcRaw = process.env.TICKET_CONTRACT_ADDRESS ?? process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS;
     let verifyingContract: `0x${string}`;
     try {
-      verifyingContract = getAddress(String(vcRaw || ""));
+      verifyingContract = getTicketContractAddress({ server: true });
     } catch {
       return NextResponse.json(
-        { ok: false, error: "Invalid verifyingContract", verifyingContract: vcRaw ?? null },
+        { ok: false, error: "Invalid verifyingContract", verifyingContract: null },
         { status: 400 }
       );
     }

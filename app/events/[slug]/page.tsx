@@ -11,6 +11,7 @@ import { resolveRecipient } from "@/lib/address";
 import { buildPayoutParams, computeAmountsWei } from "@/lib/payouts";
 import { normalizeSplitSlug } from "@/lib/events";
 import { normalizeSlug } from "@/lib/slug";
+import { getTicketContractAddress } from "@/lib/site";
 import { EVENTS } from "@/data/events";
 import { PAYOUT_ADDRESS } from "@/src/contracts/payoutDistributor.config";
 import { buildPurchaseCalldata } from "@/src/contracts/ticketSale";
@@ -171,6 +172,9 @@ export default async function EventPage({ params }: PageProps) {
     }
   }
 
+  const expectedChainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 11155111) || 11155111;
+  const ticketContractAddress = getTicketContractAddress({ server: true });
+
   return (
     <main className="min-h-screen bg-black text-white">
       <div className="mx-auto max-w-5xl px-6 py-16">
@@ -193,6 +197,8 @@ export default async function EventPage({ params }: PageProps) {
         <MetaMaskPurchase
           eventId={eventIdNumber}
           splitSlug={splitSlug}
+          ticketContractAddress={ticketContractAddress}
+          expectedChainId={expectedChainId}
           amountWei={
             resolvedPriceWei !== null
               ? resolvedPriceWei.toString()
