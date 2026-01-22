@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { EVENTS } from "@/data/events";
+import { getPublicBaseUrl } from "@/lib/site";
 
 function escapeXml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -52,7 +53,10 @@ export async function GET(
   const fallbackId = new URL(request.url).pathname.split("/").pop() || "";
   const resolved = resolveEvent(eventId ?? fallbackId);
   if (!resolved) {
-    return NextResponse.json({ ok: false, error: "Event not found" }, { status: 404 });
+    return NextResponse.json(
+      { ok: false, error: "event_not_found" },
+      { status: 404, headers: { "Content-Type": "application/json; charset=utf-8" } }
+    );
   }
 
   const { event, eventIdNumber } = resolved;
@@ -61,10 +65,13 @@ export async function GET(
   const date = event.date ?? event.dateLabel ?? "TBA";
   const svg = buildSvg(event.title, date, venue, eventIdNumber);
   const image = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+  const baseUrl = getPublicBaseUrl();
+  const externalUrl = `${baseUrl}/events/${event.slug}`;
 
   const body = {
     name: `Ticket #${eventIdNumber} — ${event.title}`,
     description: event.description ?? "Event ticket",
+    external_url: externalUrl,
     image,
     attributes: [
       { trait_type: "EventId", value: eventIdNumber },

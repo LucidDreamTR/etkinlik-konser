@@ -5,6 +5,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 300;
 
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { parseEther, type Hex } from "viem";
 
 import { resolveRecipient } from "@/lib/address";
@@ -39,19 +40,7 @@ export default async function EventPage({ params }: PageProps) {
 
   const event = EVENTS.find((e) => normalizeSlug(e.slug) === normalized);
   if (!event) {
-    return (
-      <main className="min-h-screen bg-black text-white">
-        <div className="mx-auto max-w-5xl px-6 py-16">
-          <h1 className="text-3xl font-semibold">Etkinlik bulunamadı</h1>
-          <p className="mt-3 text-white/60">Aradığınız etkinlik şu anda listede yok.</p>
-          <div className="mt-6">
-            <Link href="/events" className="rounded-full border border-white/20 px-4 py-2 text-sm hover:bg-white/5">
-              Etkinliklere dön
-            </Link>
-          </div>
-        </div>
-      </main>
-    );
+    notFound();
   }
 
   const planId = event.planId.trim();

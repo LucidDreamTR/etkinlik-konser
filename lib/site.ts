@@ -1,17 +1,18 @@
 // lib/site.ts
-export function getMetadataBase(): URL {
-  // 1) Manuel tanımladığın domain (tercih)
-  const explicit = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-  if (explicit) return new URL(explicit);
+export function getPublicBaseUrl(): string {
+  const explicit = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (explicit) return explicit.replace(/\/$/, "");
 
-  // 2) Vercel prod domain (varsa)
-  const prodUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
-  if (prodUrl) return new URL(`https://${prodUrl}`);
+  const site = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (site) return site.replace(/\/$/, "");
 
-  // 3) Vercel deployment domain (her deploy’da olur)
   const vercelUrl = process.env.VERCEL_URL?.trim();
-  if (vercelUrl) return new URL(`https://${vercelUrl}`);
+  if (vercelUrl) return `https://${vercelUrl}`;
 
-  // 4) Lokal fallback
-  return new URL("http://localhost:3000");
+  return "http://localhost:3000";
+}
+
+export function getMetadataBase(): URL {
+  const base = getPublicBaseUrl();
+  return new URL(base);
 }

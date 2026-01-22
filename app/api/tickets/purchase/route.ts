@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAddress, verifyTypedData } from "viem";
 
+import { getPublicBaseUrl } from "@/lib/site";
 import { getOrderByMerchantId, recordPaidOrder } from "@/src/lib/ordersStore";
 import { computeOrderId } from "@/src/server/orderId";
 import { purchaseOnchain } from "@/src/server/onchainPurchase";
@@ -141,7 +142,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, status: "duplicate", paymentIntentId, orderId });
     }
 
-    const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const appUrl = getPublicBaseUrl();
     const tokenUri = `${appUrl}/api/metadata/ticket/${eventIdNormalized.toString()}`;
     if (!tokenUri) {
       return NextResponse.json({ ok: false, error: "Missing tokenUri" }, { status: 400 });

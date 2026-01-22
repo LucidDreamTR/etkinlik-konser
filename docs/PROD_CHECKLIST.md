@@ -133,3 +133,26 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 
 ## Troubleshooting note
 - TicketSale zincirde event konfigürasyonu tutmaz; backend event state ve fiyat doğrulamasının tek sahibidir.
+
+## PROD CHECKLIST (Vercel)
+
+### Required env vars (Production + Preview)
+- `NEXT_PUBLIC_APP_URL=https://etkinlik-konser.vercel.app`
+- `NEXT_PUBLIC_SITE_URL=https://etkinlik-konser.vercel.app`
+- `NEXT_PUBLIC_CHAIN_ID=11155111`
+- `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS=0xF583647A536A99E6F5A2Ec5b373A726196c3BB2A`
+- `SEPOLIA_RPC_URL=...`
+- `RPC_URL=...`
+- `NEXT_PUBLIC_RPC_URL=...`
+- `BACKEND_WALLET_ADDRESS=0xfA5bb26bf7a862c668384D73ba6cBcE6E3E82dFd`
+- `BACKEND_WALLET_PRIVATE_KEY=...` (secret)
+
+### Production smoke commands
+- `curl -i https://etkinlik-konser.vercel.app/api/debug/env`
+- `curl -i https://etkinlik-konser.vercel.app/api/metadata/ticket/1`
+- `open https://etkinlik-konser.vercel.app/events/rock-gecesi-istanbul`
+
+### Expected results
+- Metadata returns JSON and includes `ChainId=11155111`.
+- `/events/rock-gecesi-istanbul` renders (no 404).
+- Homepage is real app UI (not Next template).
