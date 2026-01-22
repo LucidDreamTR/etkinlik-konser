@@ -20,6 +20,10 @@ type IntentPayload = {
   deadline: string;
 };
 
+type Eip1193Provider = {
+  request: (args: { method: string; params?: unknown[] | Record<string, unknown> }) => Promise<unknown>;
+};
+
 const INTENT_TYPES = {
   TicketIntent: [
     { name: "buyer", type: "address" },
@@ -41,16 +45,22 @@ export default function MetaMaskPurchase({ eventId, splitSlug, amountWei }: Prop
   const [txHash, setTxHash] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    setHasMetaMask(typeof window !== "undefined" && Boolean((window as { ethereum?: unknown }).ethereum));
+    setHasMetaMask(
+      typeof window !== "undefined" && Boolean((window as unknown as { ethereum?: unknown }).ethereum)
+    );
   }, []);
 
   const connectWallet = React.useCallback(async () => {
     setError(null);
-    if (typeof window === "undefined" || !(window as { ethereum?: unknown }).ethereum) {
+    if (typeof window === "undefined" || !(window as unknown as { ethereum?: unknown }).ethereum) {
       setError("MetaMask bulunamadı.");
       return;
     }
-    const ethereum = (window as { ethereum: unknown }).ethereum;
+    const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum;
+    if (!ethereum) {
+      setError("MetaMask bulunamadı.");
+      return;
+    }
     const client = createWalletClient({ transport: custom(ethereum) });
     const accounts = await client.requestAddresses();
     if (!accounts?.length) {
@@ -76,12 +86,16 @@ export default function MetaMaskPurchase({ eventId, splitSlug, amountWei }: Prop
       setError("TICKET_CONTRACT / verifying contract missing.");
       return;
     }
-    if (typeof window === "undefined" || !(window as { ethereum?: unknown }).ethereum) {
+    if (typeof window === "undefined" || !(window as unknown as { ethereum?: unknown }).ethereum) {
       setError("MetaMask bulunamadı.");
       return;
     }
 
-    const ethereum = (window as { ethereum: unknown }).ethereum;
+    const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum;
+    if (!ethereum) {
+      setError("MetaMask bulunamadı.");
+      return;
+    }
     const client = createWalletClient({ transport: custom(ethereum) });
     const chainIdHex = await client.request({ method: "eth_chainId" });
     if (typeof chainIdHex !== "string") {
@@ -89,7 +103,7 @@ export default function MetaMaskPurchase({ eventId, splitSlug, amountWei }: Prop
       return;
     }
 
-    const connectedChainId = Number(chainIdHex);
+    const connectedChainId = parseInt(chainIdHex, 16);
     if (connectedChainId !== EXPECTED_CHAIN_ID) {
       setError(`Yanlış ağ bağlı. MetaMask: ${connectedChainId}, Beklenen: ${EXPECTED_CHAIN_ID}`);
       return;

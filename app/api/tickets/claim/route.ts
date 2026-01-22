@@ -4,12 +4,11 @@ import { createPublicClient, createWalletClient, getAddress, http, isAddress } f
 import { privateKeyToAccount } from "viem/accounts";
 
 import { getOrderByMerchantId, markOrderClaimed } from "@/src/lib/ordersStore";
-import { ticketNftAbi } from "@/src/contracts/ticketNft.abi";
+import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
+import { createRateLimiter } from "@/src/server/rateLimit";
 
-const RPC_URL = "http://127.0.0.1:8545";
-const RATE_LIMIT_MAX = 10;
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const rateLimit = new Map<string, { count: number; resetAt: number }>();
+const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? process.env.RPC_URL ?? "http://127.0.0.1:8545";
+const claimLimiter = createRateLimiter({ max: 8, windowMs: 60_000 });
 
 type ClaimPayload = {
   merchantOrderId?: string;
@@ -23,26 +22,19 @@ function getClientIp(headers: Headers): string {
   return headers.get("x-real-ip") || "unknown";
 }
 
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const entry = rateLimit.get(ip);
-  if (!entry || entry.resetAt <= now) {
-    rateLimit.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-    return true;
-  }
-  if (entry.count >= RATE_LIMIT_MAX) return false;
-  entry.count += 1;
-  return true;
-}
-
 function hashClaimCode(claimCode: string): string {
   return crypto.createHash("sha256").update(claimCode).digest("hex");
 }
 
 export async function POST(request: Request) {
   const ip = getClientIp(request.headers);
-  if (!checkRateLimit(ip)) {
-    return NextResponse.json({ ok: false, error: "Rate limit exceeded" }, { status: 429 });
+  const rate = claimLimiter(ip);
+  if (!rate.ok) {
+    const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
+    return NextResponse.json(
+      { ok: false, error: "Rate limit exceeded" },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } }
+    );
   }
 
   let payload: ClaimPayload;
@@ -69,14 +61,23 @@ export async function POST(request: Request) {
   if (order.payment_status !== "paid") {
     return NextResponse.json({ ok: false, error: "Order not paid" }, { status: 400 });
   }
-  if (!order.tokenId || !order.nftAddress || !order.custodyAddress) {
-    return NextResponse.json({ ok: false, error: "Order not ready for claim" }, { status: 400 });
-  }
   if (order.claimStatus !== "unclaimed") {
     return NextResponse.json({ ok: false, error: "Already claimed" }, { status: 400 });
   }
-  if (!order.claimCodeHash) {
-    return NextResponse.json({ ok: false, error: "Claim code unavailable" }, { status: 400 });
+  if (!order.custodyAddress || !order.claimCodeHash) {
+    return NextResponse.json(
+      { ok: true, status: "not_required", message: "Ticket already minted to buyer; no claim needed" },
+      { status: 200 }
+    );
+  }
+  if (order.claimExpiresAt) {
+    const expiresAt = Date.parse(order.claimExpiresAt);
+    if (!Number.isNaN(expiresAt) && Date.now() > expiresAt) {
+      return NextResponse.json({ ok: false, error: "Claim expired" }, { status: 410 });
+    }
+  }
+  if (!order.tokenId || !order.nftAddress) {
+    return NextResponse.json({ ok: false, error: "Order not ready for claim" }, { status: 400 });
   }
 
   const computed = hashClaimCode(payload.claimCode);
@@ -86,9 +87,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "Invalid claimCode" }, { status: 401 });
   }
 
-  const custodyKeyRaw = process.env.CUSTODY_PRIVATE_KEY ?? process.env.RELAYER_PRIVATE_KEY;
+  const custodyKeyRaw =
+    process.env.CUSTODY_PRIVATE_KEY ?? process.env.BACKEND_WALLET_PRIVATE_KEY ?? process.env.RELAYER_PRIVATE_KEY;
   if (!custodyKeyRaw) {
-    return NextResponse.json({ ok: false, error: "Missing custody key" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: "Missing custody key (CUSTODY_PRIVATE_KEY or BACKEND_WALLET_PRIVATE_KEY or RELAYER_PRIVATE_KEY)" },
+      { status: 500 }
+    );
   }
   const custodyKey = (custodyKeyRaw.startsWith("0x") ? custodyKeyRaw : `0x${custodyKeyRaw}`) as `0x${string}`;
   const account = privateKeyToAccount(custodyKey);
@@ -105,7 +110,7 @@ export async function POST(request: Request) {
     const { request: transferRequest } = await publicClient.simulateContract({
       account,
       address: getAddress(order.nftAddress),
-      abi: ticketNftAbi,
+      abi: eventTicketAbi,
       functionName: "safeTransferFrom",
       args: [custodyAddress, walletAddress, BigInt(order.tokenId)],
     });

@@ -17,6 +17,7 @@ import { buildPurchaseCalldata } from "@/src/contracts/ticketSale";
 import { TICKET_SALE_ADDRESS, TICKET_SALE_CHAIN, TICKET_TX_ENABLED } from "@/src/contracts/ticketSale.config";
 import { TICKET_NFT_ADDRESS } from "@/src/contracts/ticketNft.config";
 import PayWithMetaMask from "./PayWithMetaMask";
+import MetaMaskPurchase from "../components/MetaMaskPurchase";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
@@ -56,6 +57,8 @@ export default async function EventPage({ params }: PageProps) {
   const planId = event.planId.trim();
   const splitSlug = normalizeSplitSlug(planId);
   const stableOrderId = `order-${splitSlug}`;
+  const eventIndex = EVENTS.findIndex((e) => normalizeSlug(e.slug) === normalized);
+  const eventIdNumber = eventIndex >= 0 ? eventIndex + 1 : 1;
 
   const resolvedPayouts =
     event.payouts && event.payouts.length > 0
@@ -133,7 +136,7 @@ export default async function EventPage({ params }: PageProps) {
     const ticketSaleContract = TICKET_SALE_ADDRESS;
     const splitIdInput = event.splitId;
     const orderIdInput = stableOrderId;
-    const eventIdInput = BigInt(EVENTS.findIndex((e) => normalizeSlug(e.slug) === normalized) + 1);
+    const eventIdInput = BigInt(eventIdNumber);
 
     if (!ticketSaleContract) {
       transactionWarning = "NFT bilet satın alma şu anda hazır değil.";
@@ -186,6 +189,16 @@ export default async function EventPage({ params }: PageProps) {
         <div className="mt-10 rounded-3xl border border-white/10 bg-white/5 p-6">
           Bu etkinlik sayfası server-side üretilir ve cache/ISR mantığı revalidate ile yönetilir.
         </div>
+
+        <MetaMaskPurchase
+          eventId={eventIdNumber}
+          splitSlug={splitSlug}
+          amountWei={
+            resolvedPriceWei !== null
+              ? resolvedPriceWei.toString()
+              : (event.priceWei ?? event.ticketPriceWei ?? "0")
+          }
+        />
 
         {resolvedPayouts.length > 0 ? (
           <div className="mt-10 rounded-3xl border border-white/10 bg-white/5 p-6">

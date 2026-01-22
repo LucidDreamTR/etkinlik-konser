@@ -144,7 +144,7 @@ export async function POST(request: Request) {
     const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     const tokenUri = `${appUrl}/api/metadata/ticket/${eventIdNormalized.toString()}`;
     if (!tokenUri) {
-      return NextResponse.json({ ok: false, error: "tokenUri missing" }, { status: 500 });
+      return NextResponse.json({ ok: false, error: "Missing tokenUri" }, { status: 400 });
     }
 
     const onchain = await purchaseOnchain({

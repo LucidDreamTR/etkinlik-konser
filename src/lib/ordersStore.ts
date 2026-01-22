@@ -6,6 +6,7 @@ export type ClaimStatus = "unclaimed" | "claimed";
 
 export type PaymentOrder = {
   merchantOrderId: string;
+  orderId?: string | null;
   eventId: string;
   splitSlug: string;
   buyerAddress?: string | null;
@@ -19,6 +20,7 @@ export type PaymentOrder = {
   nftAddress?: string | null;
   custodyAddress?: string | null;
   claimCodeHash?: string | null;
+  claimExpiresAt?: string | null;
   claimStatus?: ClaimStatus | null;
   claimedTo?: string | null;
   claimedAt?: string | null;
@@ -55,7 +57,9 @@ export async function getOrderByMerchantId(merchantOrderId: string): Promise<Pay
   return orders.find((order) => order.merchantOrderId === merchantOrderId);
 }
 
-export async function recordPaidOrder(order: Omit<PaymentOrder, "payment_status" | "createdAt" | "updatedAt">): Promise<{
+export async function recordPaidOrder(
+  order: Omit<PaymentOrder, "payment_status" | "createdAt" | "updatedAt">
+): Promise<{
   order: PaymentOrder;
   created: boolean;
 }> {
@@ -64,6 +68,7 @@ export async function recordPaidOrder(order: Omit<PaymentOrder, "payment_status"
   if (existing) {
     if (!existing.txHash) {
       existing.txHash = order.txHash;
+      existing.orderId = order.orderId ?? existing.orderId ?? null;
       existing.payment_status = "paid";
       existing.intentSignature = order.intentSignature ?? existing.intentSignature ?? null;
       existing.intentDeadline = order.intentDeadline ?? existing.intentDeadline ?? null;
@@ -72,6 +77,7 @@ export async function recordPaidOrder(order: Omit<PaymentOrder, "payment_status"
       existing.nftAddress = order.nftAddress ?? existing.nftAddress ?? null;
       existing.custodyAddress = order.custodyAddress ?? existing.custodyAddress ?? null;
       existing.claimCodeHash = order.claimCodeHash ?? existing.claimCodeHash ?? null;
+      existing.claimExpiresAt = order.claimExpiresAt ?? existing.claimExpiresAt ?? null;
       existing.claimStatus = order.claimStatus ?? existing.claimStatus ?? null;
       existing.claimedTo = order.claimedTo ?? existing.claimedTo ?? null;
       existing.claimedAt = order.claimedAt ?? existing.claimedAt ?? null;
@@ -97,7 +103,7 @@ export async function recordPaidOrder(order: Omit<PaymentOrder, "payment_status"
 export async function recordOrderStatus(
   order: Omit<
     PaymentOrder,
-    "createdAt" | "updatedAt" | "txHash" | "tokenId" | "nftAddress" | "custodyAddress" | "claimCodeHash" | "claimStatus" | "claimedTo" | "claimedAt"
+    "createdAt" | "updatedAt" | "txHash" | "tokenId" | "nftAddress" | "custodyAddress" | "claimCodeHash" | "claimExpiresAt" | "claimStatus" | "claimedTo" | "claimedAt"
   >
 ): Promise<{ order: PaymentOrder; created: boolean }> {
   const orders = await readStore();
@@ -114,6 +120,7 @@ export async function recordOrderStatus(
     nftAddress: null,
     custodyAddress: null,
     claimCodeHash: null,
+    claimExpiresAt: null,
     claimStatus: null,
     claimedTo: null,
     claimedAt: null,

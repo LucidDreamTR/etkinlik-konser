@@ -7,6 +7,10 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 ### Local (Anvil)
 - Start node: `anvil`
 - Run app: `npm run dev`
+- Local dev: Split init
+  - Run dev server: `HOST=127.0.0.1 npm run dev`
+  - Initialize splits: `npm run init:splits`
+  - Verify: `ENABLE_SPLIT_DEBUG=1 curl "http://localhost:3000/api/debug/split?splitSlug=rock-gecesi-istanbul"`
 - Local smoke tests:
   - `POST /api/payments/fake-pay` (local only)
   - `POST /api/payments/webhook` with PayTR test hash
@@ -99,6 +103,9 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 - `cast call <sale> "paused()(bool)"`
 - `cast call <sale> "usedOrderIds(bytes32)(bool)" <orderId>`
 - `cast call <nft> "ownerOf(uint256)(address)" <tokenId>`
+
+### Purchase example (backend-computed)
+- `cast send <sale> "purchase(bytes32,bytes32,uint256,string)" <splitId> <orderId> <eventId> "<uri>" --value <priceWei>`
 
 ### Idempotency
 - Repeat same `merchant_oid` and ensure no duplicate mint

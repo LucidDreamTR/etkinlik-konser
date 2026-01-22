@@ -54,12 +54,24 @@ function computePaytrHash(tokenStr: string, merchantKey: string): string {
   return crypto.createHmac("sha256", merchantKey).update(tokenStr).digest("base64");
 }
 
+function resolvePaytrEnv(env: NodeJS.ProcessEnv): {
+  merchantKey: string | undefined;
+  merchantSalt: string | undefined;
+  merchantId: string | undefined;
+} {
+  const mode = (env.PAYTR_ENV ?? "test").toLowerCase();
+  const suffix = mode === "prod" ? "PROD" : "TEST";
+  const merchantKey = env[`PAYTR_MERCHANT_KEY_${suffix}`] ?? env.PAYTR_MERCHANT_KEY;
+  const merchantSalt = env[`PAYTR_MERCHANT_SALT_${suffix}`] ?? env.PAYTR_MERCHANT_SALT;
+  const merchantId = env[`PAYTR_MERCHANT_ID_${suffix}`] ?? env.PAYTR_MERCHANT_ID;
+  return { merchantKey, merchantSalt, merchantId };
+}
+
 export function verifyAndParsePaytr({ rawBody, env }: VerifyArgs): ProviderVerifyResult {
   const raw = parseRawBody(rawBody);
   if (!raw) return { ok: false, reason: "Invalid body" };
 
-  const merchantKey = env.PAYTR_MERCHANT_KEY;
-  const merchantSalt = env.PAYTR_MERCHANT_SALT;
+  const { merchantKey, merchantSalt, merchantId } = resolvePaytrEnv(env);
   if (!merchantKey || !merchantSalt) {
     return { ok: false, reason: "Missing PayTR env" };
   }
@@ -85,8 +97,8 @@ export function verifyAndParsePaytr({ rawBody, env }: VerifyArgs): ProviderVerif
   const status = rawStatus.toLowerCase();
   const amountTry = raw.total_amount;
   const paymentAmount = raw.payment_amount || undefined;
-  const merchantId = raw.merchant_id || undefined;
-  if (merchantId && env.PAYTR_MERCHANT_ID && merchantId !== env.PAYTR_MERCHANT_ID) {
+  const payloadMerchantId = raw.merchant_id || undefined;
+  if (payloadMerchantId && merchantId && payloadMerchantId !== merchantId) {
     return { ok: false, reason: "Invalid merchant_id" };
   }
   const buyerAddress = raw.buyerAddress || raw.buyer_address || null;

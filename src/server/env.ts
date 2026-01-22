@@ -12,13 +12,17 @@ export function requireAddressEnv(name: string): `0x${string}` {
   return getAddress(normalized);
 }
 
-export function validateServerEnv(): void {
-  requireEnv("RELAYER_PRIVATE_KEY");
-  requireAddressEnv("TICKET_SALE_ADDRESS");
-  requireAddressEnv("NEXT_PUBLIC_TICKET_NFT_ADDRESS");
-
-  const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL ?? process.env.RPC_URL;
-  if (!rpcUrl) {
-    throw new Error("Missing env: NEXT_PUBLIC_RPC_URL or RPC_URL");
+function requireAnyAddressEnv(names: string[]): `0x${string}` {
+  for (const name of names) {
+    const value = process.env[name];
+    if (!value) continue;
+    const normalized = value.startsWith("0x") ? value : `0x${value}`;
+    return getAddress(normalized);
   }
+  throw new Error(`Missing env: ${names.join(" or ")}`);
+}
+
+export function validateServerEnv(): void {
+  requireAnyAddressEnv(["TICKET_CONTRACT_ADDRESS", "NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS"]);
+  requireEnv("BACKEND_WALLET_PRIVATE_KEY");
 }

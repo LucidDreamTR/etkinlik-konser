@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { getAddress, isAddress, verifyTypedData } from "viem";
+import crypto from "node:crypto";
+import { getAddress, verifyTypedData } from "viem";
 
-import { getOrderByMerchantId, recordPaidOrder } from "@/src/lib/ordersStore";
-import { purchaseOnchain } from "@/src/server/onchainPurchase";
+import { getOrderByMerchantId } from "@/src/lib/ordersStore";
+import { computeOrderId } from "@/src/server/orderId";
+import { createRateLimiter } from "@/src/server/rateLimit";
 
 type TicketIntent = {
   buyer: string;
@@ -29,6 +31,14 @@ const INTENT_TYPES = {
   ],
 } as const;
 
+const intentLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
+
+function getClientIp(headers: Headers): string {
+  const forwarded = headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0]?.trim() || "unknown";
+  return headers.get("x-real-ip") || "unknown";
+}
+
 function normalizeBigInt(value: TicketIntent["eventId"]): bigint {
   if (typeof value === "bigint") return value;
   if (typeof value === "number") return BigInt(value);
@@ -38,6 +48,15 @@ function normalizeBigInt(value: TicketIntent["eventId"]): bigint {
 
 export async function POST(request: Request) {
   try {
+    const rate = intentLimiter(getClientIp(request.headers));
+    if (!rate.ok) {
+      const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
+      return NextResponse.json(
+        { ok: false, error: "Rate limit exceeded" },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
+    }
+
     const raw = await request.text();
     if (!raw) {
       return NextResponse.json({ ok: false, error: "Empty body" }, { status: 400 });
@@ -53,8 +72,8 @@ export async function POST(request: Request) {
     const intent = payload.intent;
     const signature = payload.signature;
 
-    if (!intent || typeof signature !== "string" || !signature.trim()) {
-      return NextResponse.json({ ok: false, error: "Missing intent or signature" }, { status: 400 });
+    if (!intent) {
+      return NextResponse.json({ ok: false, error: "Missing intent" }, { status: 400 });
     }
 
     const buyerRaw = (intent as { buyer?: unknown } | undefined)?.buyer;
@@ -70,10 +89,17 @@ export async function POST(request: Request) {
       );
     }
     if (!intent.splitSlug || !intent.merchantOrderId) {
-      return NextResponse.json({ ok: false, error: "Missing splitSlug or merchantOrderId" }, { status: 400 });
+      const paymentIntentId = crypto.randomUUID();
+      const orderId = computeOrderId({
+        paymentIntentId,
+        buyer: buyerChecksum,
+        eventId: normalizeBigInt(intent.eventId),
+        chainId: 11155111,
+      });
+      return NextResponse.json({ ok: true, status: "created", paymentIntentId, orderId });
     }
 
-    const vcRaw = process.env.TICKET_SALE_ADDRESS ?? process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS;
+    const vcRaw = process.env.TICKET_CONTRACT_ADDRESS ?? process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS;
     let verifyingContract: `0x${string}`;
     try {
       verifyingContract = getAddress(String(vcRaw || ""));
@@ -107,7 +133,7 @@ export async function POST(request: Request) {
     const domain = {
       name: "EtkinlikKonser",
       version: "1",
-      chainId: Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 31337),
+      chainId: 11155111,
       verifyingContract: verifyingContractChecksum,
     } as const;
 
@@ -164,57 +190,51 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: "message.buyer invalid", debug }, { status: 400 });
     }
 
+    const paymentIntentId = intent.merchantOrderId;
+    const orderId = computeOrderId({
+      paymentIntentId,
+      buyer: buyerChecksumForMessage,
+      eventId: normalizeBigInt(intent.eventId),
+      chainId: 11155111,
+    });
+
+    if (!signature || !signature.trim()) {
+      return NextResponse.json({ ok: true, status: "created", paymentIntentId, orderId });
+    }
+
+    const normalizedSig = signature.trim();
+    const isHexSig = /^0x[0-9a-fA-F]{130}$/.test(normalizedSig);
+    if (!isHexSig) {
+      return NextResponse.json({ ok: false, error: "Invalid signature" }, { status: 401 });
+    }
+
     const verified = await verifyTypedData({
       address: message.buyer,
       domain,
       types: INTENT_TYPES,
       primaryType: "TicketIntent",
       message,
-      signature,
+      signature: normalizedSig as `0x${string}`,
     });
 
     if (!verified) {
       return NextResponse.json({ ok: false, error: "Invalid signature" }, { status: 401 });
     }
 
-    const existing = await getOrderByMerchantId(intent.merchantOrderId);
+    const existing = await getOrderByMerchantId(paymentIntentId);
     if (existing) {
       if (existing.txHash) {
-        return NextResponse.json({ ok: true, status: "duplicate", txHash: existing.txHash });
+        return NextResponse.json({ ok: true, status: "duplicate", txHash: existing.txHash, paymentIntentId, orderId });
       }
-      return NextResponse.json({ ok: true, status: "duplicate" });
+      return NextResponse.json({ ok: true, status: "duplicate", paymentIntentId, orderId });
     }
 
-    const onchain = await purchaseOnchain({
-      merchantOrderId: intent.merchantOrderId,
-      splitSlug: intent.splitSlug,
-      eventId: intent.eventId,
-      amountTry: intent.amountWei.toString(),
-      amountWei: intent.amountWei,
-      buyerAddress: buyerChecksumForMessage,
-      ticketSaleAddress: verifyingContract,
+    return NextResponse.json({
+      ok: true,
+      status: "verified",
+      paymentIntentId,
+      orderId,
     });
-
-    await recordPaidOrder({
-      merchantOrderId: intent.merchantOrderId,
-      splitSlug: intent.splitSlug,
-      eventId: intent.eventId.toString(),
-      amountTry: intent.amountWei.toString(),
-      buyerAddress: buyerChecksumForMessage,
-      txHash: onchain.txHash,
-      tokenId: onchain.tokenId,
-      nftAddress: onchain.nftAddress,
-      custodyAddress: null,
-      intentSignature: signature,
-      intentDeadline: deadline.toString(),
-      intentAmountWei: intent.amountWei.toString(),
-      claimCodeHash: null,
-      claimStatus: "claimed",
-      claimedTo: buyerChecksumForMessage,
-      claimedAt: new Date().toISOString(),
-    });
-
-    return NextResponse.json({ ok: true, status: "processed", txHash: onchain.txHash });
   } catch (error) {
     console.error("[/api/tickets/intent] ERROR:", error);
     const message = error instanceof Error ? error.message : String(error);

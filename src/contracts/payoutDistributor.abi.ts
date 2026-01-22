@@ -95,4 +95,34 @@ export const payoutDistributorAbi = [
     ],
     stateMutability: "view",
   },
+  {
+    type: "function",
+    name: "setSplit",
+    inputs: [
+      {
+        name: "splitId",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+      {
+        name: "recipients",
+        type: "tuple[]",
+        internalType: "struct PayoutDistributor.Recipient[]",
+        components: [
+          {
+            name: "account",
+            type: "address",
+            internalType: "address payable",
+          },
+          {
+            name: "bps",
+            type: "uint16",
+            internalType: "uint16",
+          },
+        ],
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
 ] as const;

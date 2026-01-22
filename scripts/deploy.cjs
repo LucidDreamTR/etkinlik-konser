@@ -1,14 +1,14 @@
-import hre from "hardhat";
+const hre = require("hardhat");
 
-function normalizeHexPrivateKey(value: string): `0x${string}` {
+function normalizeHexPrivateKey(value) {
   const trimmed = value.trim();
   if (!trimmed) {
     throw new Error("BACKEND_WALLET_PRIVATE_KEY is empty");
   }
-  return (trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`) as `0x${string}`;
+  return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
 }
 
-function resolveBackendAddress(): string | null {
+function resolveBackendAddress() {
   const addressRaw = process.env.BACKEND_WALLET_ADDRESS;
   if (addressRaw && addressRaw.trim()) {
     return hre.ethers.getAddress(addressRaw.trim());
@@ -16,7 +16,7 @@ function resolveBackendAddress(): string | null {
   const pkRaw = process.env.BACKEND_WALLET_PRIVATE_KEY;
   if (!pkRaw) return null;
   const privateKey = normalizeHexPrivateKey(pkRaw);
-  return new hre.ethers.Wallet(privateKey).address as `0x${string}`;
+  return new hre.ethers.Wallet(privateKey).address;
 }
 
 async function main() {

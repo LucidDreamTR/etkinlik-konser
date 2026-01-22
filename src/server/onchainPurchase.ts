@@ -96,6 +96,13 @@ export async function purchaseOnchain({
     throw new Error("Missing token URI");
   }
 
+  let to: `0x${string}`;
+  try {
+    to = getAddress(String(_buyerAddress ?? backendAccount.address));
+  } catch {
+    throw new Error("Invalid buyer address");
+  }
+
   if (process.env.NODE_ENV !== "production") {
     console.log("[onchainPurchase] mint.request", {
       eventId: normalizedEventId.toString(),
@@ -108,7 +115,7 @@ export async function purchaseOnchain({
     address: nftAddress,
     abi: eventTicketAbi,
     functionName: "safeMint",
-    args: [_buyerAddress ?? backendAccount.address, tokenUri, normalizedEventId, paymentId],
+    args: [to, tokenUri, normalizedEventId, paymentId],
   });
 
   if (process.env.NODE_ENV !== "production") {

@@ -6,6 +6,7 @@ import { processPayment } from "@/src/server/payments";
 
 type FakePayPayload = {
   merchantOrderId?: string;
+  orderId?: string;
   eventId?: string | number | bigint;
   splitSlug?: string;
   buyerAddress?: string | null;
@@ -44,6 +45,7 @@ export async function POST(request: Request) {
   try {
     const result = await processPayment({
       merchantOrderId: payload.merchantOrderId,
+      orderId: payload.orderId as `0x${string}` | undefined,
       eventId,
       splitSlug,
       buyerAddress: payload.buyerAddress ?? null,
