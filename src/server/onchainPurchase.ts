@@ -2,7 +2,7 @@ import { createPublicClient, createWalletClient, getAddress, http, parseEventLog
 import { privateKeyToAccount } from "viem/accounts";
 
 import { normalizeSplitSlug } from "@/lib/events";
-import { getTicketContractAddress } from "@/lib/site";
+import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { requireEnv, validateServerEnv } from "@/src/server/env";
 
@@ -27,6 +27,16 @@ function normalizeEventId(eventId: PurchaseArgs["eventId"]): bigint {
   if (typeof eventId === "number") return BigInt(eventId);
   if (typeof eventId === "string") return BigInt(eventId);
   throw new Error("eventId okunamadı");
+}
+
+async function resolveNextTokenId(nftAddress: `0x${string}`): Promise<bigint> {
+  const publicClient = createPublicClient({ transport: http(RPC_URL) });
+  return (await publicClient.readContract({
+    address: nftAddress,
+    abi: eventTicketAbi,
+    functionName: "nextTokenId",
+    args: [],
+  })) as bigint;
 }
 
 export async function purchaseOnchain({
@@ -92,10 +102,9 @@ export async function purchaseOnchain({
   }
 
   const paymentId = orderId;
-  const tokenUri = uri?.trim();
-  if (!tokenUri) {
-    throw new Error("Missing token URI");
-  }
+  const appUrl = getPublicBaseUrl();
+  const nextTokenId = await resolveNextTokenId(nftAddress);
+  const tokenUri = `${appUrl}/api/metadata/ticket/${normalizedEventId.toString()}?tokenId=${nextTokenId.toString()}`;
 
   let to: `0x${string}`;
   try {

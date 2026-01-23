@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { getAddress, verifyTypedData } from "viem";
+import { createPublicClient, encodePacked, getAddress, http, keccak256, verifyTypedData } from "viem";
 
 import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
+import { getTicketTypeConfig } from "@/data/ticketMetadata";
 import { getOrderByMerchantId, recordPaidOrder } from "@/src/lib/ordersStore";
-import { computeOrderId } from "@/src/server/orderId";
+import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { purchaseOnchain } from "@/src/server/onchainPurchase";
 
 type TicketIntent = {
@@ -13,6 +14,8 @@ type TicketIntent = {
   eventId: string | number | bigint;
   amountWei: string | number | bigint;
   deadline: string | number | bigint;
+  ticketType?: string;
+  seat?: string | null;
 };
 
 type PurchasePayload = {
@@ -33,6 +36,8 @@ const INTENT_TYPES = {
   ],
 } as const;
 
+const RPC_URL = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8545";
+
 function normalizeBigInt(value: TicketIntent["eventId"]): bigint {
   if (typeof value === "bigint") return value;
   if (typeof value === "number") return BigInt(value);
@@ -40,8 +45,51 @@ function normalizeBigInt(value: TicketIntent["eventId"]): bigint {
   throw new Error("Invalid numeric value");
 }
 
+function normalizeString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function resolveTicketSelection(eventIdNumber: number, ticketTypeRaw: string | null, seatRaw: string | null) {
+  const ticketConfig = getTicketTypeConfig(eventIdNumber, ticketTypeRaw);
+  const seats = ticketConfig.seats ?? [];
+  let resolvedSeat: string | null = null;
+  if (seatRaw && seats.length > 0) {
+    const match = seats.find((seat) => seat.toLowerCase() === seatRaw.toLowerCase());
+    resolvedSeat = match ?? seats[0] ?? null;
+  } else if (!seatRaw && seats.length > 0) {
+    resolvedSeat = seats[0] ?? null;
+  }
+  return {
+    ticketType: ticketConfig.ticketType,
+    seat: resolvedSeat,
+  };
+}
+
+async function resolveNextTokenId(): Promise<bigint> {
+  const contractAddress = getTicketContractAddress({ server: true });
+  const client = createPublicClient({ transport: http(RPC_URL) });
+  return (await client.readContract({
+    address: contractAddress,
+    abi: eventTicketAbi,
+    functionName: "nextTokenId",
+    args: [],
+  })) as bigint;
+}
+
 export async function POST(request: Request) {
   try {
+    if (!process.env.BACKEND_WALLET_PRIVATE_KEY) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Missing env: BACKEND_WALLET_PRIVATE_KEY (server-only, required for minting)",
+        },
+        { status: 500 }
+      );
+    }
+
     const raw = await request.text();
     if (!raw) {
       return NextResponse.json({ ok: false, error: "Empty body" }, { status: 400 });
@@ -126,12 +174,19 @@ export async function POST(request: Request) {
 
     const paymentIntentId = intent.merchantOrderId;
     const eventIdNormalized = normalizeBigInt(intent.eventId);
-    const orderId = computeOrderId({
-      paymentIntentId,
-      buyer: buyerChecksumForMessage,
-      eventId: eventIdNormalized,
-      chainId: 11155111,
-    });
+    const eventIdNumber = Number(eventIdNormalized);
+    if (!Number.isFinite(eventIdNumber)) {
+      return NextResponse.json({ ok: false, error: "Invalid eventId" }, { status: 400 });
+    }
+    const ticketTypeRaw = normalizeString(intent.ticketType);
+    const seatRaw = normalizeString(intent.seat);
+    const selection = resolveTicketSelection(eventIdNumber, ticketTypeRaw, seatRaw);
+    const orderNonce = paymentIntentId;
+    const paymentPreimage = encodePacked(
+      ["uint256", "string", "string", "address", "string"],
+      [eventIdNormalized, selection.ticketType, selection.seat ?? "", buyerChecksumForMessage, orderNonce]
+    );
+    const orderId = keccak256(paymentPreimage);
 
     const existing = await getOrderByMerchantId(paymentIntentId);
     if (existing) {
@@ -142,10 +197,13 @@ export async function POST(request: Request) {
     }
 
     const appUrl = getPublicBaseUrl();
-    const tokenUri = `${appUrl}/api/metadata/ticket/${eventIdNormalized.toString()}`;
-    if (!tokenUri) {
-      return NextResponse.json({ ok: false, error: "Missing tokenUri" }, { status: 400 });
+    let nextTokenId: bigint;
+    try {
+      nextTokenId = await resolveNextTokenId();
+    } catch {
+      return NextResponse.json({ ok: false, error: "Failed to read nextTokenId()" }, { status: 500 });
     }
+    const tokenUri = `${appUrl}/api/metadata/ticket/${eventIdNormalized.toString()}?tokenId=${nextTokenId.toString()}`;
 
     const onchain = await purchaseOnchain({
       orderId,
@@ -164,10 +222,14 @@ export async function POST(request: Request) {
     await recordPaidOrder({
       merchantOrderId: paymentIntentId,
       orderId,
+      orderNonce,
       splitSlug: intent.splitSlug,
       eventId: intent.eventId.toString(),
       amountTry: intent.amountWei.toString(),
       buyerAddress: buyerChecksumForMessage,
+      ticketType: selection.ticketType,
+      seat: selection.seat,
+      paymentIdPreimage,
       txHash: onchain.txHash,
       tokenId: onchain.tokenId,
       nftAddress: onchain.nftAddress,

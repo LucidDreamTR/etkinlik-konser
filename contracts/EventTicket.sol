@@ -18,6 +18,7 @@ contract EventTicket is ERC721, ERC721URIStorage, AccessControl {
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
     mapping(bytes32 => bool) public usedPaymentIds;
+    mapping(uint256 => bytes32) private _tokenPaymentIds;
 
     struct TicketMeta {
         uint256 eventId;
@@ -59,6 +60,7 @@ contract EventTicket is ERC721, ERC721URIStorage, AccessControl {
         _setTokenURI(tokenId, uri);
 
         tickets[tokenId] = TicketMeta({ eventId: eventId, claimed: false });
+        _tokenPaymentIds[tokenId] = paymentId;
     }
 
     /**
@@ -68,6 +70,21 @@ contract EventTicket is ERC721, ERC721URIStorage, AccessControl {
     function claim(uint256 tokenId) external {
         require(_requireOwned(tokenId) == msg.sender, "EventTicket: Caller is not the owner of the token");
         tickets[tokenId].claimed = true;
+    }
+
+    /**
+     * @dev Returns the next token ID that will be minted.
+     */
+    function nextTokenId() external view returns (uint256) {
+        return _tokenIdCounter;
+    }
+
+    /**
+     * @dev Returns the paymentId associated with a token.
+     */
+    function paymentIdOf(uint256 tokenId) external view returns (bytes32) {
+        _requireOwned(tokenId);
+        return _tokenPaymentIds[tokenId];
     }
 
     // The following functions are overrides required by Solidity because of multiple inheritance.

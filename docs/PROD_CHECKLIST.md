@@ -43,6 +43,8 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 - `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS`
 - `NEXT_PUBLIC_TICKET_SALE_ADDRESS`
 - `NEXT_PUBLIC_TICKET_NFT_ADDRESS`
+
+Active EventTicket address is the one that printed "MINTER_ROLE granted..." in deploy output; set it in `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS`.
 - `NEXT_PUBLIC_PAYOUT_DISTRIBUTOR_ADDRESS`
 - `NEXT_PUBLIC_PAYOUT_SPLITTER_ADDRESS`
 
@@ -99,12 +101,13 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 - `/api/payments/webhook` (PayTR signature)
 - `/api/tickets/intent` (EIP-712)
 - `/api/tickets/claim`
-- Verify mint tokenURI is `https://<domain>/api/metadata/ticket/<id>` (not localhost)
+- Verify mint tokenURI is `https://<domain>/api/metadata/ticket/<eventId>?tokenId=<tokenId>` (not localhost)
 
 ### On-chain checks (cast)
 - `cast call <sale> "paused()(bool)"`
 - `cast call <sale> "usedOrderIds(bytes32)(bool)" <orderId>`
 - `cast call <nft> "ownerOf(uint256)(address)" <tokenId>`
+- `cast call <nft> "nextTokenId()(uint256)"`
 
 ### Purchase example (backend-computed)
 - `cast send <sale> "purchase(bytes32,bytes32,uint256,string)" <splitId> <orderId> <eventId> "<uri>" --value <priceWei>`
@@ -135,3 +138,4 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 
 ## Troubleshooting note
 - TicketSale zincirde event konfigürasyonu tutmaz; backend event state ve fiyat doğrulamasının tek sahibidir.
+- Race-proof tokenURI requires `nextTokenId()` so the backend can embed the exact tokenId in tokenURI before mint.

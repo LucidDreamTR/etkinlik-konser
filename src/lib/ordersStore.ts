@@ -7,9 +7,13 @@ export type ClaimStatus = "unclaimed" | "claimed";
 export type PaymentOrder = {
   merchantOrderId: string;
   orderId?: string | null;
+  orderNonce?: string | null;
   eventId: string;
   splitSlug: string;
   buyerAddress?: string | null;
+  ticketType?: string | null;
+  seat?: string | null;
+  paymentIdPreimage?: string | null;
   amountTry: string;
   payment_status: PaymentStatus;
   txHash?: string | null;
@@ -66,6 +70,11 @@ async function writeStore(orders: PaymentOrder[]): Promise<void> {
 export async function getOrderByMerchantId(merchantOrderId: string): Promise<PaymentOrder | undefined> {
   const orders = await readStore();
   return orders.find((order) => order.merchantOrderId === merchantOrderId);
+}
+
+export async function getOrderByTokenId(tokenId: string): Promise<PaymentOrder | undefined> {
+  const orders = await readStore();
+  return orders.find((order) => order.tokenId === tokenId);
 }
 
 export async function recordPaidOrder(

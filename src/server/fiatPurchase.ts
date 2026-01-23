@@ -10,7 +10,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { getTicketContractAddress } from "@/lib/site";
+import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { requireEnv, validateServerEnv } from "@/src/server/env";
 
@@ -45,6 +45,16 @@ function normalizeEventId(eventId: PurchaseWithFiatArgs["eventId"]): bigint {
   if (typeof eventId === "number") return BigInt(eventId);
   if (typeof eventId === "string") return BigInt(eventId);
   throw new Error("Could not normalize eventId");
+}
+
+async function resolveNextTokenId(nftAddress: `0x${string}`): Promise<bigint> {
+  const publicClient = createPublicClient({ transport: http(RPC_URL) });
+  return (await publicClient.readContract({
+    address: nftAddress,
+    abi: eventTicketAbi,
+    functionName: "nextTokenId",
+    args: [],
+  })) as bigint;
 }
 
 /**
@@ -96,6 +106,10 @@ export async function purchaseWithFiat({
   
   console.log(`[fiatPurchase] Attempting to mint ticket for event ${eventId} to ${buyerAddress}`);
 
+  const appUrl = getPublicBaseUrl();
+  const nextTokenId = await resolveNextTokenId(nftAddress);
+  const tokenUri = `${appUrl}/api/metadata/ticket/${normalizedEventId.toString()}?tokenId=${nextTokenId.toString()}`;
+
   let txHash: Hex;
   let receipt: Awaited<ReturnType<typeof publicClient.waitForTransactionReceipt>>;
   // Simulate and execute the safeMint transaction
@@ -104,7 +118,7 @@ export async function purchaseWithFiat({
     address: nftAddress,
     abi: eventTicketAbi,
     functionName: "safeMint",
-    args: [buyerAddress, uri, normalizedEventId, paymentId],
+    args: [buyerAddress, tokenUri, normalizedEventId, paymentId],
   });
 
   if (process.env.NODE_ENV !== "production") {
