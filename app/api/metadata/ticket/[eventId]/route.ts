@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, encodePacked, http, keccak256, type Hex } from "viem";
+import { createPublicClient, encodePacked, http, isAddress, keccak256, type Hex } from "viem";
 
 import { EVENTS } from "@/data/events";
 import { getDefaultTicketSelection, getTicketTypeConfig } from "@/data/ticketMetadata";
@@ -8,6 +8,8 @@ import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { getOrderByTokenId } from "@/src/lib/ordersStore";
 
 export const dynamic = "force-dynamic";
+
+type Address = `0x${string}`;
 
 const RPC_URL = process.env.ETHEREUM_RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? process.env.RPC_URL ?? "http://127.0.0.1:8545";
 const CHAIN_ID_RAW = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 11155111);
@@ -171,10 +173,11 @@ export async function GET(
   let onchainTicket: Awaited<ReturnType<typeof resolveOnchainTicket>> | null = null;
   let paymentIdOnchain: Hex | null = null;
   let paymentReadError: string | null = null;
-  let contractAddressUsed: string | null = null;
-  if (tokenId !== null) {
+  const contractAddressRaw = getTicketContractAddress();
+  const contractAddressUsed: Address | null =
+    contractAddressRaw && isAddress(contractAddressRaw) ? (contractAddressRaw as Address) : null;
+  if (tokenId !== null && contractAddressUsed) {
     try {
-      contractAddressUsed = getTicketContractAddress({ server: true });
       const client = createPublicClient({ transport: http(RPC_URL) });
       const [ticketMeta, paymentId] = await Promise.all([
         client.readContract({
@@ -201,6 +204,8 @@ export async function GET(
       onchainTicket = null;
       paymentIdOnchain = null;
     }
+  } else if (tokenId !== null && !contractAddressUsed) {
+    paymentReadError = "Invalid contract address";
   }
 
   if (debugEnabled) {
@@ -217,7 +222,7 @@ export async function GET(
     return NextResponse.json({
       rpcUrlPresent: Boolean(RPC_URL),
       chainIdUsed: CHAIN_ID,
-      contractAddressUsed,
+      contractAddressUsed: contractAddressRaw ?? null,
       tokenIdParsed: tokenId !== null ? tokenId.toString() : null,
       paymentIdOnchain: paymentIdOnchain ?? null,
       paymentIdSource,
