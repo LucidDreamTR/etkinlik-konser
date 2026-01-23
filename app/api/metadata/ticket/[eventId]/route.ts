@@ -116,7 +116,7 @@ async function resolveOnchainTicket(tokenId: bigint) {
 async function resolvePaymentPreimageHex(args: {
   tokenId: string;
   onchainPaymentId?: Hex | null;
-}): Promise<{ paymentId: Hex | ""; qrHash: string; verified: boolean }> {
+}): Promise<{ paymentId: Hex | ""; qrHash: string; verified: boolean; source: "preimage" | "onchain" | "none" }> {
   const order = await getOrderByTokenId(args.tokenId);
   let preimageHex: Hex | null = null;
 
@@ -135,30 +135,33 @@ async function resolvePaymentPreimageHex(args: {
 
   const onchainPaymentId = args.onchainPaymentId ?? null;
   const verified = Boolean(preimageHex && onchainPaymentId && keccak256(preimageHex) === onchainPaymentId);
-  const paymentId = onchainPaymentId ?? "";
-  const qrHash = paymentId ? keccak256(paymentId as Hex) : "";
-  return { paymentId, qrHash, verified };
+  if (verified && preimageHex) {
+    return {
+      paymentId: preimageHex,
+      qrHash: keccak256(preimageHex),
+      verified,
+      source: "preimage",
+    };
+  }
+  if (onchainPaymentId) {
+    return {
+      paymentId: onchainPaymentId,
+      qrHash: onchainPaymentId,
+      verified,
+      source: "onchain",
+    };
+  }
+  return { paymentId: "", qrHash: "", verified: false, source: "none" };
 }
 
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ eventId: string }> }
 ) {
-  if (request.nextUrl.searchParams.get("debug") === "1") {
-    return NextResponse.json({
-      ok: true,
-      env: {
-        ETHEREUM_RPC_URL: Boolean(process.env.ETHEREUM_RPC_URL),
-        NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL ?? null,
-        NODE_ENV: process.env.NODE_ENV,
-      },
-      runtime: "metadata-route",
-    });
-  }
-
   const { eventId } = await context.params;
   const fallbackId = new URL(request.url).pathname.split("/").pop() || "";
   const search = request.nextUrl.searchParams;
+  const debugEnabled = search.get("debug") === "1";
   const tokenIdParam = search.get("tokenId") ?? search.get("token_id");
   const eventIdParam = search.get("eventId") ?? search.get("event_id");
 
@@ -166,12 +169,60 @@ export async function GET(
   const tokenId = parseBigIntParam(tokenIdCandidate);
 
   let onchainTicket: Awaited<ReturnType<typeof resolveOnchainTicket>> | null = null;
+  let paymentIdOnchain: Hex | null = null;
+  let paymentReadError: string | null = null;
+  let contractAddressUsed: string | null = null;
   if (tokenId !== null) {
     try {
-      onchainTicket = await resolveOnchainTicket(tokenId);
-    } catch {
+      contractAddressUsed = getTicketContractAddress({ server: true });
+      const client = createPublicClient({ transport: http(RPC_URL) });
+      const [ticketMeta, paymentId] = await Promise.all([
+        client.readContract({
+          address: contractAddressUsed,
+          abi: eventTicketAbi,
+          functionName: "tickets",
+          args: [tokenId],
+        }) as Promise<readonly [bigint, boolean]>,
+        client.readContract({
+          address: contractAddressUsed,
+          abi: eventTicketAbi,
+          functionName: "paymentIdOf",
+          args: [tokenId],
+        }) as Promise<Hex>,
+      ]);
+      onchainTicket = {
+        eventId: Number(ticketMeta[0]),
+        claimed: ticketMeta[1],
+        paymentId,
+      };
+      paymentIdOnchain = paymentId;
+    } catch (error) {
+      paymentReadError = error instanceof Error ? error.message : String(error);
       onchainTicket = null;
+      paymentIdOnchain = null;
     }
+  }
+
+  if (debugEnabled) {
+    let paymentIdSource: "preimage" | "onchain" | "none" = "none";
+    if (tokenId !== null && paymentIdOnchain) {
+      const resolved = await resolvePaymentPreimageHex({
+        tokenId: tokenId.toString(),
+        onchainPaymentId: paymentIdOnchain,
+      });
+      paymentIdSource = resolved.source;
+    } else if (paymentIdOnchain) {
+      paymentIdSource = "onchain";
+    }
+    return NextResponse.json({
+      rpcUrlPresent: Boolean(RPC_URL),
+      chainIdUsed: CHAIN_ID,
+      contractAddressUsed,
+      tokenIdParsed: tokenId !== null ? tokenId.toString() : null,
+      paymentIdOnchain: paymentIdOnchain ?? null,
+      paymentIdSource,
+      error: paymentReadError,
+    });
   }
 
   const resolved =
@@ -198,7 +249,7 @@ export async function GET(
   const payment = tokenId
     ? await resolvePaymentPreimageHex({
         tokenId: tokenId.toString(),
-        onchainPaymentId: onchainTicket?.paymentId ?? null,
+        onchainPaymentId: paymentIdOnchain ?? null,
       })
     : { paymentId: "", qrHash: "", verified: false };
 
