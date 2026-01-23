@@ -260,7 +260,7 @@ export async function GET(
   const svg = buildSvg(event.title, date, venue, displayId, ticketConfig.accent, ticketConfig.label);
   const image = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 
-  const payment = tokenId
+  const payment = tokenId !== null
     ? await resolvePaymentPreimageHex({
         tokenId: tokenId.toString(),
         onchainPaymentId: paymentIdOnchain ?? null,
