@@ -13,7 +13,7 @@ export type PaymentOrder = {
   buyerAddress?: string | null;
   ticketType?: string | null;
   seat?: string | null;
-  paymentIdPreimage?: string | null;
+  paymentPreimage?: string | null;
   amountTry: string;
   payment_status: PaymentStatus;
   txHash?: string | null;

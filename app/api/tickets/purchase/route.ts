@@ -229,7 +229,7 @@ export async function POST(request: Request) {
       buyerAddress: buyerChecksumForMessage,
       ticketType: selection.ticketType,
       seat: selection.seat,
-      paymentIdPreimage,
+      paymentPreimage,
       txHash: onchain.txHash,
       tokenId: onchain.tokenId,
       nftAddress: onchain.nftAddress,

@@ -120,8 +120,8 @@ async function resolvePaymentPreimageHex(args: {
   const order = await getOrderByTokenId(args.tokenId);
   let preimageHex: Hex | null = null;
 
-  if (order?.paymentIdPreimage) {
-    preimageHex = order.paymentIdPreimage as Hex;
+  if (order?.paymentPreimage) {
+    preimageHex = order.paymentPreimage as Hex;
   } else if (order?.buyerAddress && order.orderNonce && order.ticketType) {
     try {
       preimageHex = encodePacked(
