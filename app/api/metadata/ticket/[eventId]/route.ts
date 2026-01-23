@@ -129,8 +129,8 @@ async function resolvePaymentPreimageHex(args: {
   const order = await getOrderByTokenId(args.tokenId);
   let preimageHex: Hex | null = null;
 
-  if (order?.paymentPreimage) {
-    preimageHex = order.paymentPreimage as Hex;
+  if (order?.paymentIdPreimage) {
+    preimageHex = order.paymentIdPreimage as Hex;
   } else if (order?.buyerAddress && order.orderNonce && order.ticketType) {
     try {
       preimageHex = encodePacked(
@@ -267,6 +267,10 @@ export async function GET(
       })
     : { paymentId: "", qrHash: "", verified: false };
 
+  const paymentIdFallback = paymentIdOnchain ?? onchainTicket?.paymentId ?? "";
+  const paymentIdValue = payment.paymentId || paymentIdFallback;
+  const qrHashValue = paymentIdValue ? (payment.paymentId ? payment.qrHash : paymentIdValue) : "";
+
   const seatLabel = seatValue ? ` ${seatValue}` : "";
   const description = ticketConfig.label
     ? `${ticketConfig.label}${event.title ? ` — ${event.title}` : ""}`
@@ -280,8 +284,8 @@ export async function GET(
       { trait_type: "EventSlug", value: event.slug },
       { trait_type: "TicketType", value: ticketConfig.ticketType },
       ...(seatValue ? [{ trait_type: "Seat", value: seatValue }] : []),
-      { trait_type: "PaymentId", value: payment.paymentId },
-      { trait_type: "QRHash", value: payment.qrHash },
+      { trait_type: "PaymentId", value: paymentIdValue },
+      { trait_type: "QRHash", value: qrHashValue },
       { trait_type: "ChainId", value: CHAIN_ID.toString() },
     ],
   };
