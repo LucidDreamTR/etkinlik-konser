@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { createPublicClient, encodePacked, getAddress, http, keccak256, verifyTypedData } from "viem";
+import { createPublicClient, encodePacked, getAddress, http, verifyTypedData } from "viem";
 
 import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
 import { getTicketTypeConfig } from "@/data/ticketMetadata";
 import { getOrderByMerchantId, recordPaidOrder } from "@/src/lib/ordersStore";
+import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { purchaseOnchain } from "@/src/server/onchainPurchase";
 
@@ -186,7 +187,7 @@ export async function POST(request: Request) {
       ["uint256", "string", "string", "address", "string"],
       [eventIdNormalized, selection.ticketType, selection.seat ?? "", buyerChecksumForMessage, orderNonce]
     );
-    const orderId = keccak256(paymentPreimage);
+    const orderId = hashPaymentPreimage(paymentPreimage);
 
     const existing = await getOrderByMerchantId(paymentIntentId);
     if (existing) {

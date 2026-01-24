@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { createPublicClient, getAddress, http, isAddress, keccak256, toBytes } from "viem";
+import { createPublicClient, getAddress, http, isAddress } from "viem";
 
 import { getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
+import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { createRateLimiter } from "@/src/server/rateLimit";
 
 const verifyLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
@@ -10,6 +11,7 @@ const RPC_URL = process.env.ETHEREUM_RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL 
 const CHAIN_ID_RAW = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 11155111);
 const CHAIN_ID = Number.isFinite(CHAIN_ID_RAW) ? CHAIN_ID_RAW : 11155111;
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
+const debugEnabled = process.env.GATE_VERIFY_DEBUG === "true";
 
 type VerifyPayload = {
   tokenId?: string | number;
@@ -132,7 +134,7 @@ export async function POST(request: Request) {
       owner,
       eventId,
       claimed,
-      paymentIdOnchain,
+      ...(debugEnabled ? { paymentIdOnchain } : {}),
     });
   }
 
@@ -147,7 +149,7 @@ export async function POST(request: Request) {
       owner,
       eventId,
       claimed,
-      paymentIdOnchain,
+      ...(debugEnabled ? { paymentIdOnchain } : {}),
     });
   }
 
@@ -156,7 +158,7 @@ export async function POST(request: Request) {
     expectedHash = code.toLowerCase();
   } else {
     try {
-      expectedHash = keccak256(toBytes(code)).toLowerCase();
+      expectedHash = hashPaymentPreimage(code).toLowerCase();
     } catch {
       expectedHash = null;
     }
@@ -173,7 +175,7 @@ export async function POST(request: Request) {
       owner,
       eventId,
       claimed,
-      paymentIdOnchain,
+      ...(debugEnabled ? { paymentIdOnchain } : {}),
     });
   }
 
@@ -188,8 +190,7 @@ export async function POST(request: Request) {
       owner,
       eventId,
       claimed,
-      paymentIdOnchain,
-      expectedHash,
+      ...(debugEnabled ? { paymentIdOnchain, expectedHash } : {}),
     });
   }
 
@@ -202,7 +203,6 @@ export async function POST(request: Request) {
     owner,
     eventId,
     claimed,
-    paymentIdOnchain,
-    expectedHash,
+    ...(debugEnabled ? { paymentIdOnchain, expectedHash } : {}),
   });
 }

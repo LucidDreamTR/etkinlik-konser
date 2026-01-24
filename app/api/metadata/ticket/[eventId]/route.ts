@@ -5,7 +5,6 @@ import {
   getAddress,
   http,
   isAddress,
-  keccak256,
   type Address,
   type Hex,
 } from "viem";
@@ -13,6 +12,7 @@ import {
 import { EVENTS } from "@/data/events";
 import { getDefaultTicketSelection, getTicketTypeConfig } from "@/data/ticketMetadata";
 import { getTicketContractAddress } from "@/lib/site";
+import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { getOrderByTokenId } from "@/src/lib/ordersStore";
 
@@ -143,11 +143,11 @@ async function resolvePaymentPreimageHex(args: {
   }
 
   const onchainPaymentId = args.onchainPaymentId ?? null;
-  const verified = Boolean(preimageHex && onchainPaymentId && keccak256(preimageHex) === onchainPaymentId);
+  const verified = Boolean(preimageHex && onchainPaymentId && hashPaymentPreimage(preimageHex) === onchainPaymentId);
   if (verified && preimageHex) {
     return {
       paymentId: preimageHex,
-      qrHash: keccak256(preimageHex),
+      qrHash: hashPaymentPreimage(preimageHex),
       verified,
       source: "preimage",
     };

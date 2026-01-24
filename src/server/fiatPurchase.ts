@@ -3,14 +3,13 @@ import {
   createWalletClient,
   getAddress,
   http,
-  keccak256,
   parseEventLogs,
-  toBytes,
   type Hex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
+import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { requireEnv, validateServerEnv } from "@/src/server/env";
 
@@ -37,7 +36,7 @@ type PurchaseResult =
 function hashPaymentId(value: string): Hex {
   const trimmed = value.trim();
   if (!trimmed) throw new Error("Payment ID cannot be empty");
-  return keccak256(toBytes(trimmed));
+  return hashPaymentPreimage(trimmed);
 }
 
 function normalizeEventId(eventId: PurchaseWithFiatArgs["eventId"]): bigint {
