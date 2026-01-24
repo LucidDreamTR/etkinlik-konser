@@ -32,5 +32,8 @@ export async function GET(request: Request) {
     claimStatus: order.claimStatus,
     claimedTo: order.claimedTo,
     claimedAt: order.claimedAt,
+    chainClaimed: order.chainClaimed ?? null,
+    chainClaimTxHash: order.chainClaimTxHash ?? null,
+    chainClaimError: order.chainClaimError ?? null,
   });
 }

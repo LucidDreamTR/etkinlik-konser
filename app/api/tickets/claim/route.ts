@@ -115,6 +115,28 @@ export async function POST(request: Request) {
       args: [custodyAddress, walletAddress, BigInt(order.tokenId)],
     });
 
+    let chainClaimed = false;
+    let chainClaimTxHash: `0x${string}` | null = null;
+    let chainClaimError: string | null = null;
+
+    // Contract claim() requires current owner; custody owns the token before transfer.
+    try {
+      const { request: claimRequest } = await publicClient.simulateContract({
+        account,
+        address: getAddress(order.nftAddress),
+        abi: eventTicketAbi,
+        functionName: "claim",
+        args: [BigInt(order.tokenId)],
+      });
+
+      chainClaimTxHash = await walletClient.writeContract(claimRequest);
+      await publicClient.waitForTransactionReceipt({ hash: chainClaimTxHash });
+      chainClaimed = true;
+    } catch (error) {
+      chainClaimError = error instanceof Error ? error.message : "Unknown error";
+      chainClaimed = false;
+    }
+
     const transferTxHash = await walletClient.writeContract(transferRequest);
     await publicClient.waitForTransactionReceipt({ hash: transferTxHash });
 
@@ -123,9 +145,19 @@ export async function POST(request: Request) {
       claimedTo: walletAddress,
       claimedAt: new Date().toISOString(),
       txHash: transferTxHash,
+      chainClaimed,
+      chainClaimTxHash,
+      chainClaimError,
     });
 
-    return NextResponse.json({ ok: true, status: "claimed", transferTxHash });
+    return NextResponse.json({
+      ok: true,
+      status: "claimed",
+      transferTxHash,
+      chainClaimed,
+      ...(chainClaimTxHash ? { chainClaimTxHash } : {}),
+      ...(chainClaimError ? { chainClaimError } : {}),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

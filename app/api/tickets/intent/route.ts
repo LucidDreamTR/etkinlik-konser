@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { getAddress, verifyTypedData } from "viem";
 
-import { getOrderByMerchantId } from "@/src/lib/ordersStore";
+import { EVENTS } from "@/data/events";
+import { getOrderByMerchantId, recordOrderStatus } from "@/src/lib/ordersStore";
 import { computeOrderId } from "@/src/server/orderId";
 import { createRateLimiter } from "@/src/server/rateLimit";
 import { getTicketContractAddress } from "@/lib/site";
@@ -33,6 +34,7 @@ const INTENT_TYPES = {
 } as const;
 
 const intentLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
+const allowUnsignedIntent = process.env.ALLOW_UNSIGNED_INTENT === "true";
 
 function getClientIp(headers: Headers): string {
   const forwarded = headers.get("x-forwarded-for");
@@ -89,15 +91,32 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    const defaultEvent = EVENTS[0];
+    const splitSlug = intent.splitSlug ?? defaultEvent?.splitId ?? defaultEvent?.planId ?? defaultEvent?.slug ?? "";
     if (!intent.splitSlug || !intent.merchantOrderId) {
-      const paymentIntentId = crypto.randomUUID();
+      if (!allowUnsignedIntent) {
+        return NextResponse.json({ ok: false, error: "Signature required" }, { status: 401 });
+      }
+      const paymentIntentId = intent.merchantOrderId?.trim() || crypto.randomUUID();
       const orderId = computeOrderId({
         paymentIntentId,
         buyer: buyerChecksum,
         eventId: normalizeBigInt(intent.eventId),
         chainId: 11155111,
       });
-      return NextResponse.json({ ok: true, status: "created", paymentIntentId, orderId });
+      const existing = await getOrderByMerchantId(paymentIntentId);
+      if (!existing) {
+        await recordOrderStatus({
+          merchantOrderId: paymentIntentId,
+          orderId,
+          eventId: intent.eventId.toString(),
+          splitSlug,
+          buyerAddress: buyerChecksum,
+          amountTry: intent.amountWei?.toString?.() ?? "0",
+          payment_status: "pending",
+        });
+      }
+      return NextResponse.json({ ok: true, status: existing ? "duplicate" : "created", paymentIntentId, orderId });
     }
 
     let verifyingContract: `0x${string}`;
@@ -185,7 +204,22 @@ export async function POST(request: Request) {
     });
 
     if (!signature || !signature.trim()) {
-      return NextResponse.json({ ok: true, status: "created", paymentIntentId, orderId });
+      if (!allowUnsignedIntent) {
+        return NextResponse.json({ ok: false, error: "Signature required" }, { status: 401 });
+      }
+      const existing = await getOrderByMerchantId(paymentIntentId);
+      if (!existing) {
+        await recordOrderStatus({
+          merchantOrderId: paymentIntentId,
+          orderId,
+          eventId: intent.eventId.toString(),
+          splitSlug,
+          buyerAddress: buyerChecksumForMessage,
+          amountTry: intent.amountWei?.toString?.() ?? "0",
+          payment_status: "pending",
+        });
+      }
+      return NextResponse.json({ ok: true, status: existing ? "duplicate" : "created", paymentIntentId, orderId });
     }
 
     const normalizedSig = signature.trim();

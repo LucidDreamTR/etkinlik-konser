@@ -43,15 +43,18 @@ export async function POST(request: Request) {
   const amountTry = payload.amountTry ?? 1;
 
   try {
-    const result = await processPayment({
-      merchantOrderId: payload.merchantOrderId,
-      orderId: payload.orderId as `0x${string}` | undefined,
-      eventId,
-      splitSlug,
-      buyerAddress: payload.buyerAddress ?? null,
-      amountTry,
-      amountWei: payload.amountWei,
-    });
+    const result = await processPayment(
+      {
+        merchantOrderId: payload.merchantOrderId,
+        orderId: payload.orderId as `0x${string}` | undefined,
+        eventId,
+        splitSlug,
+        buyerAddress: payload.buyerAddress ?? null,
+        amountTry,
+        amountWei: payload.amountWei,
+      },
+      { allowPendingToProcess: true }
+    );
 
     return NextResponse.json(result);
   } catch (error) {
