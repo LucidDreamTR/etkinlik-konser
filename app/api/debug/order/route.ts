@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { getOrderByMerchantId } from "@/src/lib/ordersStore";
+import { requireDebugAccess } from "@/src/server/debugFlags";
 
 export async function GET(request: Request) {
-  const allowProdDebug = process.env.ENABLE_PROD_DEBUG === "true";
-  if (process.env.NODE_ENV !== "development" && !allowProdDebug) {
+  if (!requireDebugAccess()) {
     return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
   }
 

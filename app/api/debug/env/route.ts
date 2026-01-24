@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 
 import { getPublicBaseUrl } from "@/lib/site";
+import { requireDebugAccess } from "@/src/server/debugFlags";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const allowProdDebug = process.env.ENABLE_PROD_DEBUG === "true";
-  if (process.env.NODE_ENV !== "development" && !allowProdDebug) {
+  if (!requireDebugAccess()) {
     return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
   }
   const publicContract = process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS?.trim();

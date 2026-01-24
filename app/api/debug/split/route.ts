@@ -3,6 +3,7 @@ import { createPublicClient, getAddress, http, keccak256, toBytes } from "viem";
 
 import { normalizeSplitSlug } from "@/lib/events";
 import { payoutDistributorAbi } from "@/src/contracts/payoutDistributor.abi";
+import { requireDebugAccess } from "@/src/server/debugFlags";
 
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8545";
 
@@ -11,7 +12,7 @@ function hashSplitId(value: string) {
 }
 
 export async function GET(request: Request) {
-  if (process.env.NODE_ENV !== "development" || process.env.ENABLE_SPLIT_DEBUG !== "1") {
+  if (!requireDebugAccess()) {
     return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
   }
 

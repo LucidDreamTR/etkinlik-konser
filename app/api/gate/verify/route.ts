@@ -5,6 +5,7 @@ import { getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { getOrderByTokenId, markTokenUsedOnce } from "@/src/lib/ordersStore";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
+import { shouldIncludeGateDebug } from "@/src/server/debugFlags";
 import { createRateLimiter } from "@/src/server/rateLimit";
 
 const verifyLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
@@ -12,7 +13,7 @@ const RPC_URL = process.env.ETHEREUM_RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL 
 const CHAIN_ID_RAW = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 11155111);
 const CHAIN_ID = Number.isFinite(CHAIN_ID_RAW) ? CHAIN_ID_RAW : 11155111;
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
-const debugEnabled = process.env.GATE_VERIFY_DEBUG === "true";
+const debugEnabled = shouldIncludeGateDebug();
 
 type VerifyPayload = {
   tokenId?: string | number;

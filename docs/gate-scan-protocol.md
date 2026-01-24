@@ -39,3 +39,8 @@ Verify a ticket at the gate using the QR preimage string. A valid scan is **one-
 ## Notes
 - The gate verification endpoint is read-only onchain but writes to KV for used tracking.
 - For diagnostics, enable `GATE_VERIFY_DEBUG=true` to include hashes in responses (do not enable in prod by default).
+
+## Prod Debug Disable Checklist
+- `ENABLE_PROD_DEBUG` unset/false.
+- `GATE_VERIFY_DEBUG` unset/false.
+- `ALLOW_UNSIGNED_INTENT` only for test; disable after MVP in prod.
