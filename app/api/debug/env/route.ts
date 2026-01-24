@@ -6,6 +6,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const allowProdDebug = process.env.ENABLE_PROD_DEBUG === "true";
+  if (process.env.NODE_ENV !== "development" && !allowProdDebug) {
+    return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
+  }
   const publicContract = process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS?.trim();
   const serverContract = process.env.TICKET_CONTRACT_ADDRESS?.trim();
   const ticketContractRaw = publicContract || serverContract || null;

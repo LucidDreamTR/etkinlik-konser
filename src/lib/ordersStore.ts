@@ -32,14 +32,18 @@ export type PaymentOrder = {
   chainClaimed?: boolean | null;
   chainClaimTxHash?: string | null;
   chainClaimError?: string | null;
+  usedAt?: string | null;
+  usedBy?: string | null;
   createdAt: string;
   updatedAt: string;
 };
 
 const STORE_PATH = path.join(process.cwd(), "data", "orders.json");
+const USED_STORE_PATH = path.join(process.cwd(), "data", "used.json");
 const isProd = process.env.NODE_ENV === "production";
 const ORDER_KEY_PREFIX = "order:";
 const TOKEN_INDEX_PREFIX = "order:token:";
+const USED_KEY_PREFIX = "used:token:";
 
 function orderKey(merchantOrderId: string): string {
   return `${ORDER_KEY_PREFIX}${merchantOrderId}`;
@@ -47,6 +51,10 @@ function orderKey(merchantOrderId: string): string {
 
 function tokenIndexKey(tokenId: string): string {
   return `${TOKEN_INDEX_PREFIX}${tokenId}`;
+}
+
+function usedKey(tokenId: string): string {
+  return `${USED_KEY_PREFIX}${tokenId}`;
 }
 
 function ensureKvConfigured(): void {
@@ -83,6 +91,36 @@ async function writeStore(orders: PaymentOrder[]): Promise<void> {
   const tmpPath = `${STORE_PATH}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(orders, null, 2) + "\n", "utf8");
   await fs.rename(tmpPath, STORE_PATH);
+}
+
+async function readUsedStore(): Promise<Record<string, { usedAt: string; owner?: string | null; eventId?: string | null }>> {
+  if (isProd) {
+    throw new Error("readUsedStore() should not be used in production; use KV-backed accessors.");
+  }
+  try {
+    const raw = await fs.readFile(USED_STORE_PATH, "utf8");
+    if (!raw.trim()) return {};
+    return JSON.parse(raw) as Record<string, { usedAt: string; owner?: string | null; eventId?: string | null }>;
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") {
+      await writeUsedStore({});
+      return {};
+    }
+    throw error;
+  }
+}
+
+async function writeUsedStore(
+  used: Record<string, { usedAt: string; owner?: string | null; eventId?: string | null }>
+): Promise<void> {
+  if (isProd) {
+    throw new Error("writeUsedStore() should not be used in production; use KV-backed accessors.");
+  }
+  await fs.mkdir(path.dirname(USED_STORE_PATH), { recursive: true });
+  const tmpPath = `${USED_STORE_PATH}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(used, null, 2) + "\n", "utf8");
+  await fs.rename(tmpPath, USED_STORE_PATH);
 }
 
 export async function getOrderByMerchantId(merchantOrderId: string): Promise<PaymentOrder | undefined> {
@@ -152,6 +190,8 @@ export async function recordPaidOrder(
       existing.chainClaimed = order.chainClaimed ?? existing.chainClaimed ?? null;
       existing.chainClaimTxHash = order.chainClaimTxHash ?? existing.chainClaimTxHash ?? null;
       existing.chainClaimError = order.chainClaimError ?? existing.chainClaimError ?? null;
+      existing.usedAt = order.usedAt ?? existing.usedAt ?? null;
+      existing.usedBy = order.usedBy ?? existing.usedBy ?? null;
       existing.updatedAt = new Date().toISOString();
       await saveOrder(existing);
     }
@@ -209,6 +249,8 @@ export async function recordOrderStatus(
     chainClaimed: null,
     chainClaimTxHash: null,
     chainClaimError: null,
+    usedAt: null,
+    usedBy: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -241,4 +283,28 @@ export async function markOrderClaimed(args: {
   existing.updatedAt = new Date().toISOString();
   await saveOrder(existing);
   return existing;
+}
+
+export async function markTokenUsedOnce(args: {
+  tokenId: string;
+  owner?: string | null;
+  eventId?: string | null;
+}): Promise<{ alreadyUsed: boolean; usedAt: string }> {
+  const usedAt = new Date().toISOString();
+  if (isProd) {
+    ensureKvConfigured();
+    const result = await kv.set(usedKey(args.tokenId), { usedAt, owner: args.owner ?? null, eventId: args.eventId ?? null }, { nx: true });
+    if (result === null) {
+      return { alreadyUsed: true, usedAt };
+    }
+    return { alreadyUsed: false, usedAt };
+  }
+
+  const used = await readUsedStore();
+  if (used[args.tokenId]) {
+    return { alreadyUsed: true, usedAt: used[args.tokenId].usedAt };
+  }
+  used[args.tokenId] = { usedAt, owner: args.owner ?? null, eventId: args.eventId ?? null };
+  await writeUsedStore(used);
+  return { alreadyUsed: false, usedAt };
 }

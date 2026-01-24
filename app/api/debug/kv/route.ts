@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
 
 export async function GET() {
+  const allowProdDebug = process.env.ENABLE_PROD_DEBUG === "true";
+  if (process.env.NODE_ENV !== "development" && !allowProdDebug) {
+    return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
+  }
   try {
     const wrote = new Date().toISOString();
     await kv.set("kv:ping", wrote);

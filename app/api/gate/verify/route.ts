@@ -3,6 +3,7 @@ import { createPublicClient, getAddress, http, isAddress } from "viem";
 
 import { getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
+import { getOrderByTokenId, markTokenUsedOnce } from "@/src/lib/ordersStore";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { createRateLimiter } from "@/src/server/rateLimit";
 
@@ -114,6 +115,10 @@ export async function POST(request: Request) {
     paymentIdOnchain = paymentId.toLowerCase();
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
+    console.info("gate.verify.fail.onchain_error", {
+      tokenId: tokenId.toString(),
+      chainId: CHAIN_ID,
+    });
     return NextResponse.json({
       ok: true,
       valid: false,
@@ -125,6 +130,11 @@ export async function POST(request: Request) {
   }
 
   if (!claimed) {
+    console.info("gate.verify.fail.not_claimed", {
+      tokenId: tokenId.toString(),
+      eventId,
+      chainId: CHAIN_ID,
+    });
     return NextResponse.json({
       ok: true,
       valid: false,
@@ -140,6 +150,11 @@ export async function POST(request: Request) {
   }
 
   if (!paymentIdOnchain || paymentIdOnchain === ZERO_BYTES32) {
+    console.info("gate.verify.fail.payment_missing", {
+      tokenId: tokenId.toString(),
+      eventId,
+      chainId: CHAIN_ID,
+    });
     return NextResponse.json({
       ok: true,
       valid: false,
@@ -162,6 +177,11 @@ export async function POST(request: Request) {
   }
 
   if (!expectedHash) {
+    console.info("gate.verify.fail.invalid_code", {
+      tokenId: tokenId.toString(),
+      eventId,
+      chainId: CHAIN_ID,
+    });
     return NextResponse.json({
       ok: true,
       valid: false,
@@ -177,6 +197,11 @@ export async function POST(request: Request) {
   }
 
   if (expectedHash !== paymentIdOnchain) {
+    console.info("gate.verify.fail.payment_mismatch", {
+      tokenId: tokenId.toString(),
+      eventId,
+      chainId: CHAIN_ID,
+    });
     return NextResponse.json({
       ok: true,
       valid: false,
@@ -190,6 +215,63 @@ export async function POST(request: Request) {
       ...(debugEnabled ? { paymentIdOnchain, expectedHash } : {}),
     });
   }
+
+  const order = await getOrderByTokenId(tokenId.toString());
+  if (order?.claimedTo && owner) {
+    try {
+      const claimedTo = getAddress(order.claimedTo);
+      if (claimedTo !== owner) {
+        console.info("gate.verify.fail.not_owner", {
+          tokenId: tokenId.toString(),
+          eventId,
+          chainId: CHAIN_ID,
+        });
+        return NextResponse.json({
+          ok: true,
+          valid: false,
+          reason: "not_owner",
+          details: "Owner does not match claimed address",
+          chainId: CHAIN_ID,
+          tokenId: tokenId.toString(),
+          owner,
+          eventId,
+          claimed,
+        });
+      }
+    } catch {
+      // If stored claimedTo is invalid, skip owner check to avoid false negatives.
+    }
+  }
+
+  const useResult = await markTokenUsedOnce({
+    tokenId: tokenId.toString(),
+    owner,
+    eventId,
+  });
+  if (useResult.alreadyUsed) {
+    console.info("gate.verify.fail.already_used", {
+      tokenId: tokenId.toString(),
+      eventId,
+      chainId: CHAIN_ID,
+    });
+    return NextResponse.json({
+      ok: true,
+      valid: false,
+      reason: "already_used",
+      details: "Ticket already used",
+      chainId: CHAIN_ID,
+      tokenId: tokenId.toString(),
+      owner,
+      eventId,
+      claimed,
+    });
+  }
+
+  console.info("gate.verify.success", {
+    tokenId: tokenId.toString(),
+    eventId,
+    chainId: CHAIN_ID,
+  });
 
   return NextResponse.json({
     ok: true,
