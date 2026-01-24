@@ -56,6 +56,7 @@ export async function POST(request: Request) {
   }
 
   let payload: VerifyPayload;
+  // QR code content === payment preimage; expectedHash = keccak256(preimage).
   try {
     payload = (await request.json()) as VerifyPayload;
   } catch {
@@ -154,14 +155,10 @@ export async function POST(request: Request) {
   }
 
   let expectedHash: string | null = null;
-  if (/^0x[0-9a-fA-F]{64}$/.test(code)) {
-    expectedHash = code.toLowerCase();
-  } else {
-    try {
-      expectedHash = hashPaymentPreimage(code).toLowerCase();
-    } catch {
-      expectedHash = null;
-    }
+  try {
+    expectedHash = hashPaymentPreimage(code).toLowerCase();
+  } catch {
+    expectedHash = null;
   }
 
   if (!expectedHash) {

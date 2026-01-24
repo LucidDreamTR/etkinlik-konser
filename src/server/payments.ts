@@ -94,17 +94,6 @@ export async function processPayment(
     throw new Error("tokenUri missing");
   }
 
-  const onchain = await purchaseWithFiat({
-    merchantOrderId,
-    eventId: payload.eventId,
-    buyerAddress: resolvedBuyer,
-    uri: tokenUri,
-  });
-
-  if ("alreadyUsed" in onchain && onchain.alreadyUsed) {
-    return { ok: true, status: "duplicate", txHash: existing?.txHash ?? "", message: "Order already used" };
-  }
-
   const custodyAddress = buyerAddress ? null : custodyAddressResolved;
   const shouldIssueClaimCode = buyerAddress === null && !existing?.claimCodeHash;
   const claimCode = shouldIssueClaimCode ? crypto.randomBytes(32).toString("base64url") : null;
@@ -114,6 +103,20 @@ export async function processPayment(
   const ttlSecondsRaw = Number(process.env.CLAIM_TTL_SECONDS ?? 86400);
   const ttlSeconds = Number.isFinite(ttlSecondsRaw) && ttlSecondsRaw > 0 ? ttlSecondsRaw : 86400;
   const claimExpiresAt = claimCode ? new Date(Date.now() + ttlSeconds * 1000).toISOString() : null;
+  // QR code content === payment preimage (single source of truth).
+  const paymentPreimage = existing?.paymentPreimage ?? claimCode ?? merchantOrderId;
+
+  const onchain = await purchaseWithFiat({
+    merchantOrderId,
+    eventId: payload.eventId,
+    buyerAddress: resolvedBuyer,
+    paymentPreimage,
+    uri: tokenUri,
+  });
+
+  if ("alreadyUsed" in onchain && onchain.alreadyUsed) {
+    return { ok: true, status: "duplicate", txHash: existing?.txHash ?? "", message: "Order already used" };
+  }
 
   await recordPaidOrder({
     merchantOrderId,
@@ -122,6 +125,7 @@ export async function processPayment(
     eventId: eventIdNormalized,
     amountTry: normalizeAmount(payload.amountTry),
     buyerAddress,
+    paymentPreimage,
     txHash: onchain.txHash,
     tokenId: onchain.tokenId,
     nftAddress: onchain.nftAddress,

@@ -122,32 +122,32 @@ async function resolveOnchainTicket(tokenId: bigint) {
   };
 }
 
-async function resolvePaymentPreimageHex(args: {
+async function resolvePaymentPreimage(args: {
   tokenId: string;
   onchainPaymentId?: Hex | null;
-}): Promise<{ paymentId: Hex | ""; qrHash: string; verified: boolean; source: "preimage" | "onchain" | "none" }> {
+}): Promise<{ paymentId: string; qrHash: string; verified: boolean; source: "preimage" | "onchain" | "none" }> {
   const order = await getOrderByTokenId(args.tokenId);
-  let preimageHex: Hex | null = null;
+  let preimage: string | null = null;
 
   if (order?.paymentPreimage) {
-    preimageHex = order.paymentPreimage as Hex;
+    preimage = order.paymentPreimage;
   } else if (order?.buyerAddress && order.orderNonce && order.ticketType) {
     try {
-      preimageHex = encodePacked(
+      preimage = encodePacked(
         ["uint256", "string", "string", "address", "string"],
         [BigInt(order.eventId), order.ticketType, order.seat ?? "", order.buyerAddress as `0x${string}`, order.orderNonce]
       );
     } catch {
-      preimageHex = null;
+      preimage = null;
     }
   }
 
   const onchainPaymentId = args.onchainPaymentId ?? null;
-  const verified = Boolean(preimageHex && onchainPaymentId && hashPaymentPreimage(preimageHex) === onchainPaymentId);
-  if (verified && preimageHex) {
+  const verified = Boolean(preimage && onchainPaymentId && hashPaymentPreimage(preimage) === onchainPaymentId);
+  if (verified && preimage) {
     return {
-      paymentId: preimageHex,
-      qrHash: hashPaymentPreimage(preimageHex),
+      paymentId: preimage,
+      qrHash: hashPaymentPreimage(preimage),
       verified,
       source: "preimage",
     };
@@ -220,7 +220,7 @@ export async function GET(
   if (debugEnabled) {
     let paymentIdSource: "preimage" | "onchain" | "none" = "none";
     if (tokenId !== null && paymentIdOnchain) {
-      const resolved = await resolvePaymentPreimageHex({
+      const resolved = await resolvePaymentPreimage({
         tokenId: tokenId.toString(),
         onchainPaymentId: paymentIdOnchain,
       });
@@ -261,7 +261,7 @@ export async function GET(
   const image = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 
   const payment = tokenId !== null
-    ? await resolvePaymentPreimageHex({
+    ? await resolvePaymentPreimage({
         tokenId: tokenId.toString(),
         onchainPaymentId: paymentIdOnchain ?? null,
       })

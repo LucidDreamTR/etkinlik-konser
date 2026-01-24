@@ -19,6 +19,8 @@ type PurchaseWithFiatArgs = {
   merchantOrderId: string;
   eventId: string | number | bigint;
   buyerAddress: `0x${string}`;
+  // QR code content (payment preimage) used to derive onchain paymentId.
+  paymentPreimage: string;
   // The URI for the token metadata
   uri: string; 
 };
@@ -36,6 +38,7 @@ type PurchaseResult =
 function hashPaymentId(value: string): Hex {
   const trimmed = value.trim();
   if (!trimmed) throw new Error("Payment ID cannot be empty");
+  // QR code content === payment preimage.
   return hashPaymentPreimage(trimmed);
 }
 
@@ -64,6 +67,7 @@ export async function purchaseWithFiat({
   merchantOrderId,
   eventId,
   buyerAddress,
+  paymentPreimage,
   uri,
 }: PurchaseWithFiatArgs): Promise<PurchaseResult> {
   validateServerEnv();
@@ -99,7 +103,8 @@ export async function purchaseWithFiat({
   const publicClient = createPublicClient({ transport: http(RPC_URL) });
   const walletClient = createWalletClient({ account, transport: http(RPC_URL) });
 
-  const paymentId = hashPaymentId(merchantOrderId);
+  // Onchain paymentId is derived ONLY from the QR preimage.
+  const paymentId = hashPaymentId(paymentPreimage);
 
   const normalizedEventId = normalizeEventId(eventId);
   
