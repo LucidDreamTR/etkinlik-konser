@@ -203,7 +203,7 @@ export async function recordOrderStatus(
     custodyAddress: null,
     claimCodeHash: null,
     claimExpiresAt: null,
-    claimStatus: null,
+    claimStatus: "unclaimed",
     claimedTo: null,
     claimedAt: null,
     chainClaimed: null,

@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 import { getOrderByMerchantId } from "@/src/lib/ordersStore";
 
 export async function GET(request: Request) {
-  if (process.env.NODE_ENV !== "development") {
+  const allowProdDebug = process.env.ENABLE_PROD_DEBUG === "true";
+  if (process.env.NODE_ENV !== "development" && !allowProdDebug) {
     return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
   }
 

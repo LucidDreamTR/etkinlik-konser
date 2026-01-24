@@ -113,6 +113,8 @@ export async function POST(request: Request) {
           splitSlug,
           buyerAddress: buyerChecksum,
           amountTry: intent.amountWei?.toString?.() ?? "0",
+          intentAmountWei: intent.amountWei?.toString?.() ?? "0",
+          intentDeadline: intent.deadline?.toString?.() ?? "",
           payment_status: "pending",
         });
       }
@@ -216,6 +218,8 @@ export async function POST(request: Request) {
           splitSlug,
           buyerAddress: buyerChecksumForMessage,
           amountTry: intent.amountWei?.toString?.() ?? "0",
+          intentAmountWei: intent.amountWei?.toString?.() ?? "0",
+          intentDeadline: intent.deadline?.toString?.() ?? "",
           payment_status: "pending",
         });
       }
