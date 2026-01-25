@@ -1,6 +1,6 @@
 export const runtime = "nodejs";
 
-const BUILD_SHA = "09f8df6";
+const BUILD_SHA = "914efff";
 
 export async function GET() {
   return Response.json(
