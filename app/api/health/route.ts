@@ -1,35 +1,15 @@
-import { kv } from "@vercel/kv";
+export const runtime = "nodejs";
 
-import { getServerEnv } from "@/src/lib/env";
-import { getChainConfig } from "@/src/lib/chain";
-import { jsonNoStore } from "@/src/lib/http";
-import { logger } from "@/src/lib/logger";
+const HEALTH_VERSION = "480f052";
 
 export async function GET() {
-  const env = getServerEnv();
-  const chain = getChainConfig();
-  let kvOk = false;
-
-  try {
-    if (env.VERCEL_ENV === "production") {
-      await kv.get("health:ping");
-      kvOk = true;
-    } else {
-      const key = `health:ping:${Date.now()}`;
-      await kv.set(key, "1", { ex: 60 });
-      const value = await kv.get(key);
-      kvOk = Boolean(value);
-      await kv.del(key).catch(() => {});
+  return Response.json(
+    { ok: true, v: HEALTH_VERSION },
+    {
+      status: 200,
+      headers: {
+        "Cache-Control": "no-store",
+      },
     }
-  } catch (error) {
-    logger.warn("health.kv_failed", { error });
-    kvOk = false;
-  }
-
-  return jsonNoStore({
-    ok: true,
-    commit: env.VERCEL_GIT_COMMIT_SHA ?? null,
-    chainId: chain.chainId,
-    kvOk,
-  });
+  );
 }

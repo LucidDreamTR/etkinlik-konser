@@ -12,6 +12,7 @@ import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { requireEnv, validateServerEnv } from "@/src/server/env";
+import { logger } from "@/src/lib/logger";
 
 const RPC_URL = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8545";
 
@@ -75,7 +76,7 @@ export async function purchaseWithFiat({
   // Use BACKEND_WALLET_PRIVATE_KEY as requested for the minter wallet
   const privateKeyRaw = requireEnv("BACKEND_WALLET_PRIVATE_KEY");
   const privateKey = (privateKeyRaw.startsWith("0x") ? privateKeyRaw : `0x${privateKeyRaw}`) as `0x${string}`;
-  
+
   // The address of the new EventTicket contract
   const nftAddress = getTicketContractAddress({ server: true });
 
@@ -84,13 +85,13 @@ export async function purchaseWithFiat({
   if (process.env.NODE_ENV !== "production" && backendAddress) {
     try {
       if (getAddress(backendAddress) !== account.address) {
-        console.warn("[fiatPurchase] BACKEND_WALLET_ADDRESS mismatch", {
+        logger.warn("fiatPurchase.backend_address_mismatch", {
           env: backendAddress,
           derived: account.address,
         });
       }
     } catch {
-      console.warn("[fiatPurchase] BACKEND_WALLET_ADDRESS invalid", backendAddress);
+      logger.warn("fiatPurchase.backend_address_invalid", { env: backendAddress });
     }
   }
   if (
@@ -98,7 +99,7 @@ export async function purchaseWithFiat({
     RPC_URL.includes("127.0.0.1:8545") &&
     process.env.NEXT_PUBLIC_CHAIN_ID === "11155111"
   ) {
-    console.warn("[fiatPurchase] RPC_URL points to localhost while chain is Sepolia", RPC_URL);
+    logger.warn("fiatPurchase.rpc_localhost_with_sepolia", { rpcUrl: RPC_URL });
   }
   const publicClient = createPublicClient({ transport: http(RPC_URL) });
   const walletClient = createWalletClient({ account, transport: http(RPC_URL) });
@@ -108,7 +109,7 @@ export async function purchaseWithFiat({
 
   const normalizedEventId = normalizeEventId(eventId);
   
-  console.log(`[fiatPurchase] Attempting to mint ticket for event ${eventId} to ${buyerAddress}`);
+  logger.info("fiatPurchase.mint_attempt", { eventId: String(eventId), buyerAddress });
 
   const appUrl = getPublicBaseUrl();
   const nextTokenId = await resolveNextTokenId(nftAddress);
@@ -126,7 +127,11 @@ export async function purchaseWithFiat({
   });
 
   if (process.env.NODE_ENV !== "production") {
-    console.log("[mint] rpc", RPC_URL, "backend", account.address, "contract", nftAddress);
+    logger.info("fiatPurchase.mint_rpc", {
+      rpcUrl: RPC_URL,
+      backend: account.address,
+      contract: nftAddress,
+    });
   }
   txHash = await walletClient.writeContract(request);
   receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
@@ -142,7 +147,7 @@ export async function purchaseWithFiat({
   }
 
   const tokenId = minted.args.tokenId.toString();
-  console.log(`[fiatPurchase] Successfully minted token ${tokenId} with tx ${txHash}`);
+  logger.info("fiatPurchase.mint_success", { tokenId, txHash });
 
   return {
     txHash,

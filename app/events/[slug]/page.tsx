@@ -17,6 +17,7 @@ import { PAYOUT_ADDRESS } from "@/src/contracts/payoutDistributor.config";
 import { buildPurchaseCalldata } from "@/src/contracts/ticketSale";
 import { TICKET_SALE_ADDRESS, TICKET_SALE_CHAIN, TICKET_TX_ENABLED } from "@/src/contracts/ticketSale.config";
 import { TICKET_NFT_ADDRESS } from "@/src/contracts/ticketNft.config";
+import { logger } from "@/src/lib/logger";
 import PayWithMetaMask from "./PayWithMetaMask";
 import MetaMaskPurchase from "../components/MetaMaskPurchase";
 
@@ -29,7 +30,7 @@ export default async function EventPage({ params }: PageProps) {
   const normalized = normalizeSlug(slug);
 
   if (process.env.NODE_ENV === "development") {
-    console.log("[event lookup]", {
+    logger.info("event.lookup", {
       raw: slug,
       norm: normalized,
       count: EVENTS.length,

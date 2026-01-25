@@ -5,6 +5,7 @@ import { normalizeSplitSlug } from "@/lib/events";
 import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { requireEnv, validateServerEnv } from "@/src/server/env";
+import { logger } from "@/src/lib/logger";
 
 const RPC_URL = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8545";
 
@@ -49,14 +50,21 @@ export async function purchaseOnchain({
   | { alreadyUsed: true }
   | { alreadyUsed?: false; txHash: Hex; tokenId: string; nftAddress: `0x${string}` }
 > {
+  const toOnchainError = (stage: "simulate" | "send" | "receipt", error: unknown) => {
+    const message = error instanceof Error ? error.message : "Onchain error";
+    const err = new Error(message) as Error & { stage?: string; rpcErrorCode?: unknown };
+    err.stage = stage;
+    err.rpcErrorCode = (error as { code?: unknown } | null)?.code ?? null;
+    return err;
+  };
+
   validateServerEnv();
   if (process.env.NODE_ENV !== "production") {
-    console.log(
-      "[onchainPurchase] env",
-      `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS=${process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS ?? ""}`,
-      `NEXT_PUBLIC_RPC_URL=${process.env.NEXT_PUBLIC_RPC_URL ?? ""}`,
-      `RPC_URL=${process.env.RPC_URL ?? ""}`
-    );
+    logger.info("onchain.env", {
+      NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS: process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS ?? "",
+      NEXT_PUBLIC_RPC_URL: process.env.NEXT_PUBLIC_RPC_URL ?? "",
+      RPC_URL: process.env.RPC_URL ?? "",
+    });
   }
 
   const privateKeyRaw = requireEnv("BACKEND_WALLET_PRIVATE_KEY");
@@ -74,13 +82,13 @@ export async function purchaseOnchain({
   if (process.env.NODE_ENV !== "production" && backendAddress) {
     try {
       if (getAddress(backendAddress) !== backendAccount.address) {
-        console.warn("[onchainPurchase] BACKEND_WALLET_ADDRESS mismatch", {
+        logger.warn("onchain.backend_address_mismatch", {
           env: backendAddress,
           derived: backendAccount.address,
         });
       }
     } catch {
-      console.warn("[onchainPurchase] BACKEND_WALLET_ADDRESS invalid", backendAddress);
+      logger.warn("onchain.backend_address_invalid", { env: backendAddress });
     }
   }
   if (
@@ -88,10 +96,10 @@ export async function purchaseOnchain({
     RPC_URL.includes("127.0.0.1:8545") &&
     process.env.NEXT_PUBLIC_CHAIN_ID === "11155111"
   ) {
-    console.warn("[onchainPurchase] RPC_URL points to localhost while chain is Sepolia", RPC_URL);
+    logger.warn("onchain.rpc_localhost_with_sepolia", { rpcUrl: RPC_URL });
   }
   if (process.env.NODE_ENV !== "production") {
-    console.log("[onchainPurchase] backend", backendAccount.address, "contract", nftAddress);
+    logger.info("onchain.backend", { backend: backendAccount.address, contract: nftAddress });
   }
   const publicClient = createPublicClient({ transport: http(RPC_URL) });
   const walletClient = createWalletClient({ account: backendAccount, transport: http(RPC_URL) });
@@ -114,31 +122,51 @@ export async function purchaseOnchain({
   }
 
   if (process.env.NODE_ENV !== "production") {
-    console.log("[onchainPurchase] mint.request", {
+    logger.info("onchain.mint_request", {
       eventId: normalizedEventId.toString(),
       splitSlug: normalizedSplit,
     });
   }
 
-  const { request } = await publicClient.simulateContract({
-    account: backendAccount,
-    address: nftAddress,
-    abi: eventTicketAbi,
-    functionName: "safeMint",
-    args: [to, tokenUri, normalizedEventId, paymentId],
-  });
+  let request;
+  try {
+    ({ request } = await publicClient.simulateContract({
+      account: backendAccount,
+      address: nftAddress,
+      abi: eventTicketAbi,
+      functionName: "safeMint",
+      args: [to, tokenUri, normalizedEventId, paymentId],
+    }));
+  } catch (error) {
+    throw toOnchainError("simulate", error);
+  }
 
   if (process.env.NODE_ENV !== "production") {
-    console.log("[mint] rpc", RPC_URL, "backend", backendAccount.address, "contract", nftAddress);
+    logger.info("onchain.mint_rpc", {
+      rpcUrl: RPC_URL,
+      backend: backendAccount.address,
+      contract: nftAddress,
+    });
   }
-  const txHash = await walletClient.writeContract(request);
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+  let txHash: Hex;
+  try {
+    txHash = await walletClient.writeContract(request);
+  } catch (error) {
+    throw toOnchainError("send", error);
+  }
+
+  let receipt;
+  try {
+    receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+  } catch (error) {
+    throw toOnchainError("receipt", error);
+  }
   const logs = receipt.logs.filter((log) => getAddress(log.address) === nftAddress);
   const parsed = parseEventLogs({ abi: eventTicketAbi, eventName: "Transfer", logs });
   const minted = parsed.find((entry) => entry.args.from === "0x0000000000000000000000000000000000000000");
 
   if (!minted) {
-    throw new Error("Mint event not found");
+    throw toOnchainError("receipt", new Error("Mint event not found"));
   }
 
   return {

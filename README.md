@@ -24,6 +24,16 @@ This project uses system font stacks for both sans and mono text, so builds work
 
 TicketSale zincirde event konfigürasyonu tutmaz. Event durumu ve fiyat doğrulaması backend tarafındadır; zincir sadece ödeme ve replay kontrolü yapar.
 
+## Production docs
+
+- `docs/prod-security-checklist.md`
+- `docs/prod-deploy-checklist.md`
+- `docs/rollback-plan.md`
+- `docs/architecture.md`
+- `docs/operator-runbook.md`
+- `docs/ops-visibility.md`
+- `docs/security.md`
+
 ## Local seeding
 
 Deploy local contracts and print addresses:

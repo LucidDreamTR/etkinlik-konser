@@ -1,29 +1,119 @@
-import { NextResponse } from "next/server";
+import crypto from "crypto";
 import { createPublicClient, getAddress, http, isAddress } from "viem";
+import { kv } from "@vercel/kv";
 
 import { getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
-import { getOrderByTokenId, markTokenUsedOnce } from "@/src/lib/ordersStore";
+import { getOrderByTokenId, markOrderClaimed, markTokenUsedOnce } from "@/src/lib/ordersStore";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { shouldIncludeGateDebug } from "@/src/server/debugFlags";
 import { createRateLimiter } from "@/src/server/rateLimit";
+import { getServerEnv } from "@/src/lib/env";
+import { jsonNoStore } from "@/src/lib/http";
+import { emitMetric } from "@/src/lib/metrics";
+import { getChainConfig } from "@/src/lib/chain";
+import { logger } from "@/src/lib/logger";
 
 const verifyLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
-const RPC_URL = process.env.ETHEREUM_RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? process.env.RPC_URL ?? "http://127.0.0.1:8545";
-const CHAIN_ID_RAW = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 11155111);
-const CHAIN_ID = Number.isFinite(CHAIN_ID_RAW) ? CHAIN_ID_RAW : 11155111;
+const env = getServerEnv();
+const chain = getChainConfig();
+const RPC_URL = chain.rpcUrl;
+const CHAIN_ID = chain.chainId;
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const debugEnabled = shouldIncludeGateDebug();
+const INVALID_CODE_LIMIT = 5;
+const INVALID_CODE_LOCK_MINUTES = 10;
+const INVALID_CODE_WINDOW_SECONDS = 15 * 60;
+const GATE_LOCK_TTL_SECONDS = 10;
+const hasKv = Boolean(env.KV_REST_API_URL && env.KV_REST_API_TOKEN);
 
 type VerifyPayload = {
   tokenId?: string | number;
   code?: string;
 };
 
+type VerifyErrorReason =
+  | "rate_limited"
+  | "invalid_json"
+  | "invalid_token"
+  | "missing_code"
+  | "temporarily_locked"
+  | "onchain_error"
+  | "not_claimed"
+  | "payment_missing"
+  | "invalid_code"
+  | "payment_mismatch"
+  | "not_owner"
+  | "already_used";
+
 function getClientIp(headers: Headers): string {
   const forwarded = headers.get("x-forwarded-for");
   if (forwarded) return forwarded.split(",")[0]?.trim() || "unknown";
   return headers.get("x-real-ip") || "unknown";
+}
+
+function hashIp(ip: string): string {
+  return crypto.createHash("sha256").update(ip).digest("hex");
+}
+
+function logGateFailure(reason: VerifyErrorReason, tokenId: string, eventId: string | null, ipHash: string) {
+  logger.info(`gate.verify.fail.${reason}`, {
+    action: "gate.verify",
+    reason,
+    tokenId,
+    eventId,
+    chainId: CHAIN_ID,
+    ipHash,
+  });
+}
+
+function logGateSuccess(tokenId: string, eventId: string | null, ipHash: string) {
+  logger.info("gate.verify.success", {
+    action: "gate.verify",
+    reason: "valid",
+    tokenId,
+    eventId,
+    chainId: CHAIN_ID,
+    ipHash,
+  });
+}
+
+function respondFailure({
+  ok,
+  reason,
+  status,
+  tokenId,
+  eventId,
+  owner,
+  claimed,
+  details,
+  debugExtras,
+}: {
+  ok: boolean;
+  reason: VerifyErrorReason;
+  status: number;
+  tokenId: string;
+  eventId: string | null;
+  owner?: string | null;
+  claimed?: boolean;
+  details?: string;
+  debugExtras?: Record<string, unknown>;
+}) {
+  return jsonNoStore(
+    {
+      ok,
+      valid: false,
+      reason,
+      chainId: CHAIN_ID,
+      tokenId,
+      eventId,
+      ...(typeof owner === "string" ? { owner } : {}),
+      ...(typeof claimed === "boolean" ? { claimed } : {}),
+      ...(details ? { details } : {}),
+      ...(debugEnabled && debugExtras ? debugExtras : {}),
+    },
+    { status }
+  );
 }
 
 function parseTokenId(value: unknown): bigint | null {
@@ -47,242 +137,361 @@ function normalizeCode(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
+function isBytes32Hex(value: string): boolean {
+  return /^0x[0-9a-fA-F]{64}$/.test(value.trim());
+}
+
 export async function POST(request: Request) {
-  const rate = verifyLimiter(getClientIp(request.headers));
-  if (!rate.ok) {
-    const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
-    return NextResponse.json(
-      { ok: false, error: "Rate limit exceeded" },
-      { status: 429, headers: { "Retry-After": String(retryAfter) } }
-    );
-  }
-
-  let payload: VerifyPayload;
-  // QR code content === payment preimage; expectedHash = keccak256(preimage).
-  try {
-    payload = (await request.json()) as VerifyPayload;
-  } catch {
-    return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 });
-  }
-
-  const tokenId = parseTokenId(payload?.tokenId);
-  if (tokenId === null) {
-    return NextResponse.json({ ok: false, error: "Invalid tokenId" }, { status: 400 });
-  }
-
-  const code = normalizeCode(payload?.code);
-  if (!code) {
-    return NextResponse.json({ ok: false, error: "Missing code" }, { status: 400 });
-  }
-
-  const contractAddressRaw = getTicketContractAddress({ server: true });
-  const contractAddress = isAddress(contractAddressRaw) ? (getAddress(contractAddressRaw) as `0x${string}`) : null;
-  if (!contractAddress) {
-    return NextResponse.json({ ok: true, valid: false, reason: "onchain_error", details: "Invalid contract address", chainId: CHAIN_ID, tokenId: tokenId.toString() });
-  }
-
-  const client = createPublicClient({ transport: http(RPC_URL) });
-
-  let owner: string | null = null;
-  let claimed = false;
-  let eventId: string | null = null;
-  let paymentIdOnchain: string | null = null;
+  const startedAt = Date.now();
+  let gateLockKey: string | null = null;
+  const ip = getClientIp(request.headers);
+  const ipHash = hashIp(ip);
 
   try {
-    const [ownerRaw, ticketMeta, paymentId] = await Promise.all([
-      client.readContract({
-        address: contractAddress,
-        abi: eventTicketAbi,
-        functionName: "ownerOf",
-        args: [tokenId],
-      }) as Promise<`0x${string}`>,
-      client.readContract({
-        address: contractAddress,
-        abi: eventTicketAbi,
-        functionName: "tickets",
-        args: [tokenId],
-      }) as Promise<readonly [bigint, boolean]>,
-      client.readContract({
-        address: contractAddress,
-        abi: eventTicketAbi,
-        functionName: "paymentIdOf",
-        args: [tokenId],
-      }) as Promise<`0x${string}`>,
-    ]);
+    if (env.VERCEL_ENV === "production" && !env.FEATURE_TICKETING_ENABLED) {
+      return jsonNoStore({ ok: false, valid: false, reason: "disabled", chainId: CHAIN_ID }, { status: 503 });
+    }
 
-    owner = getAddress(ownerRaw);
-    eventId = ticketMeta[0].toString();
-    claimed = Boolean(ticketMeta[1]);
-    paymentIdOnchain = paymentId.toLowerCase();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    console.info("gate.verify.fail.onchain_error", {
-      tokenId: tokenId.toString(),
-      chainId: CHAIN_ID,
-    });
-    return NextResponse.json({
-      ok: true,
-      valid: false,
-      reason: "onchain_error",
-      details: message,
-      chainId: CHAIN_ID,
-      tokenId: tokenId.toString(),
-    });
-  }
+    if (env.VERCEL_ENV === "production") {
+      const operatorKey = env.GATE_OPERATOR_KEY ?? "";
+      const headerKey = request.headers.get("x-operator-key") ?? "";
+      if (!operatorKey || headerKey !== operatorKey) {
+        emitMetric(
+          "gate_invalid",
+          { route: "/api/gate/verify", ip, reason: "unauthorized" },
+          Date.now() - startedAt
+        );
+        return jsonNoStore({ ok: false, valid: false, reason: "unauthorized", chainId: CHAIN_ID }, { status: 401 });
+      }
+    }
 
-  if (!claimed) {
-    console.info("gate.verify.fail.not_claimed", {
-      tokenId: tokenId.toString(),
-      eventId,
-      chainId: CHAIN_ID,
-    });
-    return NextResponse.json({
-      ok: true,
-      valid: false,
-      reason: "not_claimed",
-      details: "Ticket not claimed",
-      chainId: CHAIN_ID,
-      tokenId: tokenId.toString(),
-      owner,
-      eventId,
-      claimed,
-      ...(debugEnabled ? { paymentIdOnchain } : {}),
-    });
-  }
-
-  if (!paymentIdOnchain || paymentIdOnchain === ZERO_BYTES32) {
-    console.info("gate.verify.fail.payment_missing", {
-      tokenId: tokenId.toString(),
-      eventId,
-      chainId: CHAIN_ID,
-    });
-    return NextResponse.json({
-      ok: true,
-      valid: false,
-      reason: "payment_missing",
-      details: "Missing paymentId onchain",
-      chainId: CHAIN_ID,
-      tokenId: tokenId.toString(),
-      owner,
-      eventId,
-      claimed,
-      ...(debugEnabled ? { paymentIdOnchain } : {}),
-    });
-  }
-
-  let expectedHash: string | null = null;
-  try {
-    expectedHash = hashPaymentPreimage(code).toLowerCase();
-  } catch {
-    expectedHash = null;
-  }
-
-  if (!expectedHash) {
-    console.info("gate.verify.fail.invalid_code", {
-      tokenId: tokenId.toString(),
-      eventId,
-      chainId: CHAIN_ID,
-    });
-    return NextResponse.json({
-      ok: true,
-      valid: false,
-      reason: "invalid_code",
-      details: "Invalid code",
-      chainId: CHAIN_ID,
-      tokenId: tokenId.toString(),
-      owner,
-      eventId,
-      claimed,
-      ...(debugEnabled ? { paymentIdOnchain } : {}),
-    });
-  }
-
-  if (expectedHash !== paymentIdOnchain) {
-    console.info("gate.verify.fail.payment_mismatch", {
-      tokenId: tokenId.toString(),
-      eventId,
-      chainId: CHAIN_ID,
-    });
-    return NextResponse.json({
-      ok: true,
-      valid: false,
-      reason: "payment_mismatch",
-      details: "Payment hash does not match",
-      chainId: CHAIN_ID,
-      tokenId: tokenId.toString(),
-      owner,
-      eventId,
-      claimed,
-      ...(debugEnabled ? { paymentIdOnchain, expectedHash } : {}),
-    });
-  }
-
-  const order = await getOrderByTokenId(tokenId.toString());
-  if (order?.claimedTo && owner) {
-    try {
-      const claimedTo = getAddress(order.claimedTo);
-      if (claimedTo !== owner) {
-        console.info("gate.verify.fail.not_owner", {
-          tokenId: tokenId.toString(),
-          eventId,
-          chainId: CHAIN_ID,
-        });
-        return NextResponse.json({
-          ok: true,
+    const rate = verifyLimiter(ip);
+    if (!rate.ok) {
+      const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
+      logGateFailure("rate_limited", "unknown", null, ipHash);
+      emitMetric(
+        "rate_limit_hit",
+        { route: "/api/gate/verify", ip, reason: "rate_limited" },
+        Date.now() - startedAt
+      );
+      return jsonNoStore(
+        {
+          ok: false,
           valid: false,
-          reason: "not_owner",
-          details: "Owner does not match claimed address",
+          reason: "rate_limited",
           chainId: CHAIN_ID,
-          tokenId: tokenId.toString(),
-          owner,
-          eventId,
-          claimed,
+          tokenId: "unknown",
+          eventId: null,
+        },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
+    }
+
+    let payload: VerifyPayload;
+    // QR code content === payment preimage; expectedHash = keccak256(preimage).
+    try {
+      payload = (await request.json()) as VerifyPayload;
+    } catch {
+      logGateFailure("invalid_json", "unknown", null, ipHash);
+      return respondFailure({
+        ok: false,
+        reason: "invalid_json",
+        status: 400,
+        tokenId: "unknown",
+        eventId: null,
+        details: "Invalid JSON",
+      });
+    }
+
+    const tokenId = parseTokenId(payload?.tokenId);
+    if (tokenId === null) {
+      logGateFailure("invalid_token", "unknown", null, ipHash);
+      return respondFailure({
+        ok: false,
+        reason: "invalid_token",
+        status: 400,
+        tokenId: "unknown",
+        eventId: null,
+        details: "Invalid tokenId",
+      });
+    }
+
+    const tokenIdString = tokenId.toString();
+    const code = normalizeCode(payload?.code);
+    if (!code) {
+      logGateFailure("missing_code", tokenIdString, null, ipHash);
+      return respondFailure({
+        ok: false,
+        reason: "missing_code",
+        status: 400,
+        tokenId: tokenIdString,
+        eventId: null,
+        details: "Missing code",
+      });
+    }
+
+    if (hasKv) {
+      const lockKey = `gate:verify:lock:${tokenIdString}`;
+      const locked = await kv.get<string>(lockKey);
+      if (locked) {
+        logGateFailure("temporarily_locked", tokenIdString, null, ipHash);
+        emitMetric(
+          "lock_hit",
+          { route: "/api/gate/verify", tokenId: tokenIdString, ip, reason: "temporarily_locked" },
+          Date.now() - startedAt
+        );
+        return respondFailure({
+          ok: true,
+          reason: "temporarily_locked",
+          status: 429,
+          tokenId: tokenIdString,
+          eventId: null,
+          details: "Too many invalid attempts",
         });
       }
-    } catch {
-      // If stored claimedTo is invalid, skip owner check to avoid false negatives.
-    }
-  }
 
-  const useResult = await markTokenUsedOnce({
-    tokenId: tokenId.toString(),
-    owner,
-    eventId,
-  });
-  if (useResult.alreadyUsed) {
-    console.info("gate.verify.fail.already_used", {
-      tokenId: tokenId.toString(),
+      gateLockKey = `gate:lock:${tokenIdString}`;
+      const gateLocked = await kv.set(gateLockKey, "1", { nx: true, ex: GATE_LOCK_TTL_SECONDS });
+      if (!gateLocked) {
+        logGateFailure("temporarily_locked", tokenIdString, null, ipHash);
+        emitMetric(
+          "lock_hit",
+          { route: "/api/gate/verify", tokenId: tokenIdString, ip, reason: "gate_lock" },
+          Date.now() - startedAt
+        );
+        return respondFailure({
+          ok: true,
+          reason: "temporarily_locked",
+          status: 429,
+          tokenId: tokenIdString,
+          eventId: null,
+          details: "Verification already in progress",
+        });
+      }
+    }
+
+    const contractAddressRaw = getTicketContractAddress({ server: true });
+    const contractAddress = isAddress(contractAddressRaw) ? (getAddress(contractAddressRaw) as `0x${string}`) : null;
+    if (!contractAddress) {
+      logGateFailure("onchain_error", tokenIdString, null, ipHash);
+      return respondFailure({
+        ok: true,
+        reason: "onchain_error",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId: null,
+        details: "Invalid contract address",
+      });
+    }
+
+    const client = createPublicClient({ transport: http(RPC_URL) });
+
+    let owner: string | null = null;
+    let claimed = false;
+    let eventId: string | null = null;
+    let paymentIdOnchain: string | null = null;
+
+    try {
+      const [ownerRaw, ticketMeta, paymentId] = await Promise.all([
+        client.readContract({
+          address: contractAddress,
+          abi: eventTicketAbi,
+          functionName: "ownerOf",
+          args: [tokenId],
+        }) as Promise<`0x${string}`>,
+        client.readContract({
+          address: contractAddress,
+          abi: eventTicketAbi,
+          functionName: "tickets",
+          args: [tokenId],
+        }) as Promise<readonly [bigint, boolean]>,
+        client.readContract({
+          address: contractAddress,
+          abi: eventTicketAbi,
+          functionName: "paymentIdOf",
+          args: [tokenId],
+        }) as Promise<`0x${string}`>,
+      ]);
+
+      owner = getAddress(ownerRaw);
+      eventId = ticketMeta[0].toString();
+      claimed = Boolean(ticketMeta[1]);
+      paymentIdOnchain = paymentId.toLowerCase();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      logGateFailure("onchain_error", tokenIdString, null, ipHash);
+      return respondFailure({
+        ok: true,
+        reason: "onchain_error",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId: null,
+        details: message,
+      });
+    }
+
+    if (!claimed) {
+      logGateFailure("not_claimed", tokenIdString, eventId, ipHash);
+      return respondFailure({
+        ok: true,
+        reason: "not_claimed",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId,
+        owner,
+        claimed,
+        details: "Ticket not claimed",
+        debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
+      });
+    }
+
+    if (!paymentIdOnchain || paymentIdOnchain === ZERO_BYTES32) {
+      logGateFailure("payment_missing", tokenIdString, eventId, ipHash);
+      return respondFailure({
+        ok: true,
+        reason: "payment_missing",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId,
+        owner,
+        claimed,
+        details: "Missing paymentId onchain",
+        debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
+      });
+    }
+
+    const trimmedCode = code.trim();
+    const expectedHash = isBytes32Hex(trimmedCode)
+      ? trimmedCode.toLowerCase()
+      : hashPaymentPreimage(trimmedCode).toLowerCase();
+    const normalizedOnchain = paymentIdOnchain.toLowerCase();
+    if (expectedHash !== normalizedOnchain) {
+      logGateFailure("payment_mismatch", tokenIdString, eventId, ipHash);
+      if (hasKv) {
+        const invalidKey = `gate:verify:invalid:${tokenIdString}`;
+        const count = await kv.incr(invalidKey);
+        if (count === 1) {
+          await kv.expire(invalidKey, INVALID_CODE_WINDOW_SECONDS);
+        }
+        if (count >= INVALID_CODE_LIMIT) {
+          const lockKey = `gate:verify:lock:${tokenIdString}`;
+          await kv.set(lockKey, "1", { ex: INVALID_CODE_LOCK_MINUTES * 60 });
+          await kv.del(invalidKey).catch(() => {});
+        }
+      }
+      emitMetric(
+        "gate_invalid",
+        { route: "/api/gate/verify", tokenId: tokenIdString, ip, reason: "payment_mismatch" },
+        Date.now() - startedAt
+      );
+      return respondFailure({
+        ok: true,
+        reason: "payment_mismatch",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId,
+        owner,
+        claimed,
+        details: "Payment hash does not match",
+        debugExtras: debugEnabled ? { paymentIdOnchain, expectedHash } : undefined,
+      });
+    }
+
+    const order = await getOrderByTokenId(tokenIdString);
+    let claimedToStored: string | null = order?.claimedTo ?? null;
+    let claimedToOnchain: string | null = owner ?? null;
+    let claimedToMismatchHealed = false;
+    if (order?.claimedTo && owner) {
+      try {
+        const claimedTo = getAddress(order.claimedTo);
+        if (claimedTo !== owner) {
+          if (claimed === true && order.merchantOrderId && order.txHash) {
+            try {
+              await markOrderClaimed({
+                merchantOrderId: order.merchantOrderId,
+                claimedTo: owner,
+                claimedAt: new Date().toISOString(),
+                txHash: order.txHash,
+                chainClaimed: order.chainClaimed ?? null,
+                chainClaimTxHash: order.chainClaimTxHash ?? null,
+                chainClaimError: order.chainClaimError ?? null,
+              });
+              claimedToMismatchHealed = true;
+            } catch {
+              // best-effort sync only
+            }
+          } else {
+            logGateFailure("not_owner", tokenIdString, eventId, ipHash);
+            return respondFailure({
+              ok: true,
+              reason: "not_owner",
+              status: 200,
+              tokenId: tokenIdString,
+              eventId,
+              owner,
+              claimed,
+              details: "Owner does not match claimed address",
+              debugExtras: debugEnabled
+                ? { claimedToStored: order.claimedTo, claimedToOnchain: owner, claimedToMismatchHealed: false }
+                : undefined,
+            });
+          }
+        }
+      } catch {
+        // If stored claimedTo is invalid, skip owner check to avoid false negatives.
+      }
+    }
+
+    const useResult = await markTokenUsedOnce({
+      tokenId: tokenIdString,
+      owner,
       eventId,
-      chainId: CHAIN_ID,
     });
-    return NextResponse.json({
+    if (useResult.alreadyUsed) {
+      logGateFailure("already_used", tokenIdString, eventId, ipHash);
+      emitMetric(
+        "gate_invalid",
+        { route: "/api/gate/verify", tokenId: tokenIdString, ip, reason: "already_used" },
+        Date.now() - startedAt
+      );
+      return respondFailure({
+        ok: true,
+        reason: "already_used",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId,
+        owner,
+        claimed,
+        details: "Ticket already used",
+        debugExtras: debugEnabled
+          ? { claimedToStored, claimedToOnchain, claimedToMismatchHealed }
+          : undefined,
+      });
+    }
+
+    logGateSuccess(tokenIdString, eventId, ipHash);
+
+    emitMetric(
+      "gate_valid",
+      { route: "/api/gate/verify", tokenId: tokenIdString, ip },
+      Date.now() - startedAt
+    );
+    return jsonNoStore({
       ok: true,
-      valid: false,
-      reason: "already_used",
-      details: "Ticket already used",
+      valid: true,
+      reason: "valid",
       chainId: CHAIN_ID,
-      tokenId: tokenId.toString(),
+      tokenId: tokenIdString,
       owner,
       eventId,
       claimed,
+      ...(debugEnabled
+        ? { paymentIdOnchain, expectedHash, claimedToStored, claimedToOnchain, claimedToMismatchHealed }
+        : {}),
     });
+  } finally {
+    if (gateLockKey && hasKv) {
+      await kv.del(gateLockKey).catch(() => {});
+    }
   }
-
-  console.info("gate.verify.success", {
-    tokenId: tokenId.toString(),
-    eventId,
-    chainId: CHAIN_ID,
-  });
-
-  return NextResponse.json({
-    ok: true,
-    valid: true,
-    reason: "valid",
-    chainId: CHAIN_ID,
-    tokenId: tokenId.toString(),
-    owner,
-    eventId,
-    claimed,
-    ...(debugEnabled ? { paymentIdOnchain, expectedHash } : {}),
-  });
 }

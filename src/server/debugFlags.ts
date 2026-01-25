@@ -1,11 +1,11 @@
-const isProd = process.env.NODE_ENV === "production";
-const enableProdDebug = process.env.ENABLE_PROD_DEBUG === "true";
+import { isProdDebugEnabled } from "@/src/lib/debug";
+
 const gateVerifyDebug = process.env.GATE_VERIFY_DEBUG === "true";
 
 export function requireDebugAccess() {
-  return !isProd || enableProdDebug;
+  return process.env.VERCEL_ENV !== "production";
 }
 
 export function shouldIncludeGateDebug() {
-  return gateVerifyDebug;
+  return gateVerifyDebug && isProdDebugEnabled();
 }

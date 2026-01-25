@@ -1,12 +1,18 @@
-import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { getAddress, verifyTypedData } from "viem";
+import { kv } from "@vercel/kv";
 
 import { EVENTS } from "@/data/events";
 import { getOrderByMerchantId, recordOrderStatus } from "@/src/lib/ordersStore";
 import { computeOrderId } from "@/src/server/orderId";
 import { createRateLimiter } from "@/src/server/rateLimit";
 import { getTicketContractAddress } from "@/lib/site";
+import { getServerEnv } from "@/src/lib/env";
+import { jsonNoStore } from "@/src/lib/http";
+import { emitMetric } from "@/src/lib/metrics";
+import { getChainConfig } from "@/src/lib/chain";
+import { logger } from "@/src/lib/logger";
+import { isProdDebugEnabled } from "@/src/lib/debug";
 
 type TicketIntent = {
   buyer: string;
@@ -34,7 +40,15 @@ const INTENT_TYPES = {
 } as const;
 
 const intentLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
-const allowUnsignedIntent = process.env.ALLOW_UNSIGNED_INTENT === "true";
+const INTENT_LOCK_TTL_SECONDS = 60;
+const env = getServerEnv();
+const chain = getChainConfig();
+const debugEnabled = isProdDebugEnabled();
+const allowUnsignedIntent = env.ALLOW_UNSIGNED_INTENT;
+const isLocalDev = process.env.NODE_ENV === "development" && !process.env.VERCEL_ENV;
+// In production, signature is always required even if ALLOW_UNSIGNED_INTENT is set.
+const shouldAllowUnsignedIntent = env.VERCEL_ENV !== "production" && (allowUnsignedIntent || isLocalDev);
+const hasKv = Boolean(env.KV_REST_API_URL && env.KV_REST_API_TOKEN);
 
 function getClientIp(headers: Headers): string {
   const forwarded = headers.get("x-forwarded-for");
@@ -50,11 +64,19 @@ function normalizeBigInt(value: TicketIntent["eventId"]): bigint {
 }
 
 export async function POST(request: Request) {
+  const clientIp = getClientIp(request.headers);
+  const startedAt = Date.now();
+  let lockKey: string | null = null;
   try {
-    const rate = intentLimiter(getClientIp(request.headers));
+    const rate = intentLimiter(clientIp);
     if (!rate.ok) {
       const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
-      return NextResponse.json(
+      emitMetric(
+        "rate_limit_hit",
+        { route: "/api/tickets/intent", ip: clientIp, reason: "rate_limited" },
+        Date.now() - startedAt
+      );
+      return jsonNoStore(
         { ok: false, error: "Rate limit exceeded" },
         { status: 429, headers: { "Retry-After": String(retryAfter) } }
       );
@@ -62,21 +84,21 @@ export async function POST(request: Request) {
 
     const raw = await request.text();
     if (!raw) {
-      return NextResponse.json({ ok: false, error: "Empty body" }, { status: 400 });
+      return jsonNoStore({ ok: false, error: "Empty body" }, { status: 400 });
     }
 
     let payload: IntentPayload;
     try {
       payload = JSON.parse(raw) as IntentPayload;
     } catch (error) {
-      return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 });
+      return jsonNoStore({ ok: false, error: "Invalid JSON" }, { status: 400 });
     }
 
     const intent = payload.intent;
     const signature = payload.signature;
 
     if (!intent) {
-      return NextResponse.json({ ok: false, error: "Missing intent" }, { status: 400 });
+      return jsonNoStore({ ok: false, error: "Missing intent" }, { status: 400 });
     }
 
     const buyerRaw = (intent as { buyer?: unknown } | undefined)?.buyer;
@@ -86,7 +108,7 @@ export async function POST(request: Request) {
     try {
       buyerChecksum = getAddress(buyer);
     } catch {
-      return NextResponse.json(
+      return jsonNoStore(
         { ok: false, error: "Invalid intent.buyer", buyer: buyerRaw ?? null },
         { status: 400 }
       );
@@ -94,16 +116,33 @@ export async function POST(request: Request) {
     const defaultEvent = EVENTS[0];
     const splitSlug = intent.splitSlug ?? defaultEvent?.splitId ?? defaultEvent?.planId ?? defaultEvent?.slug ?? "";
     if (!intent.splitSlug || !intent.merchantOrderId) {
-      if (!allowUnsignedIntent) {
-        return NextResponse.json({ ok: false, error: "Signature required" }, { status: 401 });
+      if (!shouldAllowUnsignedIntent) {
+        return jsonNoStore({ ok: false, error: "Signature required" }, { status: 401 });
       }
       const paymentIntentId = intent.merchantOrderId?.trim() || crypto.randomUUID();
       const orderId = computeOrderId({
         paymentIntentId,
         buyer: buyerChecksum,
         eventId: normalizeBigInt(intent.eventId),
-        chainId: 11155111,
+        chainId: chain.chainId,
       });
+
+      if (hasKv) {
+        lockKey = `intent:lock:${paymentIntentId}`;
+        const acquired = await kv.set(lockKey, "1", { nx: true, ex: INTENT_LOCK_TTL_SECONDS });
+        if (!acquired) {
+          emitMetric(
+            "lock_hit",
+            { route: "/api/tickets/intent", merchantOrderId: paymentIntentId, ip: clientIp },
+            Date.now() - startedAt
+          );
+          return jsonNoStore(
+            { ok: true, status: "pending", paymentIntentId, orderId },
+            { status: 202 }
+          );
+        }
+      }
+
       const existing = await getOrderByMerchantId(paymentIntentId);
       if (!existing) {
         await recordOrderStatus({
@@ -118,29 +157,29 @@ export async function POST(request: Request) {
           payment_status: "pending",
         });
       }
-      return NextResponse.json({ ok: true, status: existing ? "duplicate" : "created", paymentIntentId, orderId });
+      if (lockKey) {
+        await kv.del(lockKey).catch(() => {});
+      }
+      return jsonNoStore({ ok: true, status: existing ? "duplicate" : "created", paymentIntentId, orderId });
     }
 
     let verifyingContract: `0x${string}`;
     try {
       verifyingContract = getTicketContractAddress({ server: true });
     } catch {
-      return NextResponse.json(
-        { ok: false, error: "Invalid verifyingContract", verifyingContract: null },
-        { status: 400 }
-      );
+      return jsonNoStore({ ok: false, error: "Invalid verifyingContract" }, { status: 400 });
     }
 
     const deadline = normalizeBigInt(intent.deadline);
     const now = BigInt(Math.floor(Date.now() / 1000));
     if (deadline < now) {
-      return NextResponse.json({ ok: false, error: "Intent expired" }, { status: 400 });
+      return jsonNoStore({ ok: false, error: "Intent expired" }, { status: 400 });
     }
 
     const domain = {
       name: "EtkinlikKonser",
       version: "1",
-      chainId: 11155111,
+      chainId: chain.chainId,
       verifyingContract,
     } as const;
 
@@ -148,10 +187,7 @@ export async function POST(request: Request) {
     try {
       buyerChecksumForMessage = getAddress(String(intent.buyer));
     } catch {
-      return NextResponse.json(
-        { ok: false, error: "Invalid buyer before verifyTypedData", buyer: intent?.buyer ?? null },
-        { status: 400 }
-      );
+      return jsonNoStore({ ok: false, error: "Invalid buyer before verifyTypedData" }, { status: 400 });
     }
 
     const message = {
@@ -163,9 +199,12 @@ export async function POST(request: Request) {
       deadline: normalizeBigInt(intent.deadline),
     } as const;
 
-    console.log("[intent debug] domain =", domain);
-    console.log("[intent debug] message =", message);
-    console.log("[intent debug] signature? =", typeof signature, signature?.slice?.(0, 10));
+    if (debugEnabled) {
+      logger.info("intent.debug", {
+        domain,
+        message: { buyer: message.buyer, merchantOrderId: message.merchantOrderId },
+      });
+    }
 
     const debug = {
       domainVerifyingContract: (domain as unknown as { verifyingContract?: string })?.verifyingContract,
@@ -173,15 +212,15 @@ export async function POST(request: Request) {
     };
 
     if (!debug.domainVerifyingContract || String(debug.domainVerifyingContract) === "undefined") {
-      return NextResponse.json(
-        { ok: false, error: "domain.verifyingContract is undefined", debug },
+      return jsonNoStore(
+        { ok: false, error: "domain.verifyingContract is undefined", ...(debugEnabled ? { debug } : {}) },
         { status: 400 }
       );
     }
 
     if (!debug.messageBuyer || String(debug.messageBuyer) === "undefined") {
-      return NextResponse.json(
-        { ok: false, error: "message.buyer is undefined", debug },
+      return jsonNoStore(
+        { ok: false, error: "message.buyer is undefined", ...(debugEnabled ? { debug } : {}) },
         { status: 400 }
       );
     }
@@ -189,12 +228,18 @@ export async function POST(request: Request) {
     try {
       getAddress(String(debug.domainVerifyingContract));
     } catch {
-      return NextResponse.json({ ok: false, error: "domain.verifyingContract invalid", debug }, { status: 400 });
+      return jsonNoStore(
+        { ok: false, error: "domain.verifyingContract invalid", ...(debugEnabled ? { debug } : {}) },
+        { status: 400 }
+      );
     }
     try {
       getAddress(String(debug.messageBuyer));
     } catch {
-      return NextResponse.json({ ok: false, error: "message.buyer invalid", debug }, { status: 400 });
+      return jsonNoStore(
+        { ok: false, error: "message.buyer invalid", ...(debugEnabled ? { debug } : {}) },
+        { status: 400 }
+      );
     }
 
     const paymentIntentId = intent.merchantOrderId;
@@ -202,12 +247,25 @@ export async function POST(request: Request) {
       paymentIntentId,
       buyer: buyerChecksumForMessage,
       eventId: normalizeBigInt(intent.eventId),
-      chainId: 11155111,
+      chainId: chain.chainId,
     });
 
+    if (hasKv && !lockKey) {
+      lockKey = `intent:lock:${paymentIntentId}`;
+      const acquired = await kv.set(lockKey, "1", { nx: true, ex: INTENT_LOCK_TTL_SECONDS });
+      if (!acquired) {
+        emitMetric(
+          "lock_hit",
+          { route: "/api/tickets/intent", merchantOrderId: paymentIntentId, ip: clientIp },
+          Date.now() - startedAt
+        );
+        return jsonNoStore({ ok: true, status: "pending", paymentIntentId, orderId }, { status: 202 });
+      }
+    }
+
     if (!signature || !signature.trim()) {
-      if (!allowUnsignedIntent) {
-        return NextResponse.json({ ok: false, error: "Signature required" }, { status: 401 });
+      if (!shouldAllowUnsignedIntent) {
+        return jsonNoStore({ ok: false, error: "Signature required" }, { status: 401 });
       }
       const existing = await getOrderByMerchantId(paymentIntentId);
       if (!existing) {
@@ -223,13 +281,16 @@ export async function POST(request: Request) {
           payment_status: "pending",
         });
       }
-      return NextResponse.json({ ok: true, status: existing ? "duplicate" : "created", paymentIntentId, orderId });
+      if (lockKey) {
+        await kv.del(lockKey).catch(() => {});
+      }
+      return jsonNoStore({ ok: true, status: existing ? "duplicate" : "created", paymentIntentId, orderId });
     }
 
     const normalizedSig = signature.trim();
     const isHexSig = /^0x[0-9a-fA-F]{130}$/.test(normalizedSig);
     if (!isHexSig) {
-      return NextResponse.json({ ok: false, error: "Invalid signature" }, { status: 401 });
+      return jsonNoStore({ ok: false, error: "Invalid signature" }, { status: 401 });
     }
 
     const verified = await verifyTypedData({
@@ -242,26 +303,44 @@ export async function POST(request: Request) {
     });
 
     if (!verified) {
-      return NextResponse.json({ ok: false, error: "Invalid signature" }, { status: 401 });
+      return jsonNoStore({ ok: false, error: "Invalid signature" }, { status: 401 });
     }
 
     const existing = await getOrderByMerchantId(paymentIntentId);
     if (existing) {
       if (existing.txHash) {
-        return NextResponse.json({ ok: true, status: "duplicate", txHash: existing.txHash, paymentIntentId, orderId });
+      if (lockKey) {
+        await kv.del(lockKey).catch(() => {});
       }
-      return NextResponse.json({ ok: true, status: "duplicate", paymentIntentId, orderId });
+      return jsonNoStore({
+        ok: true,
+        status: "duplicate",
+        txHash: existing.txHash,
+        paymentIntentId,
+        orderId,
+      });
+    }
+      if (lockKey) {
+        await kv.del(lockKey).catch(() => {});
+      }
+      return jsonNoStore({ ok: true, status: "duplicate", paymentIntentId, orderId });
     }
 
-    return NextResponse.json({
+    if (lockKey) {
+      await kv.del(lockKey).catch(() => {});
+    }
+    return jsonNoStore({
       ok: true,
       status: "verified",
       paymentIntentId,
       orderId,
     });
   } catch (error) {
-    console.error("[/api/tickets/intent] ERROR:", error);
+    logger.error("intent.error", { error });
     const message = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    if (lockKey) {
+      await kv.del(lockKey).catch(() => {});
+    }
+    return jsonNoStore({ ok: false, error: message }, { status: 500 });
   }
 }

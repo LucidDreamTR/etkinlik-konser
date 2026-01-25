@@ -1,9 +1,13 @@
 import { getAddress } from "viem";
+
 import { getTicketContractAddress } from "@/lib/site";
+import { getServerEnv } from "@/src/lib/env";
 
 export function requireEnv(name: string): string {
-  const value = process.env[name];
+  const env = getServerEnv() as Record<string, string | boolean | undefined>;
+  const value = env[name];
   if (!value) throw new Error(`Missing env: ${name}`);
+  if (typeof value !== "string") return String(value);
   return value;
 }
 

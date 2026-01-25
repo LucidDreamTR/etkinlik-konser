@@ -5,6 +5,7 @@ import { validateServerEnv } from "@/src/server/env";
 import { processPayment } from "@/src/server/payments";
 import { verifyAndParse } from "@/src/server/payments/providers";
 import { createRateLimiter } from "@/src/server/rateLimit";
+import { logger } from "@/src/lib/logger";
 
 function okResponse() {
   return new Response("OK", { status: 200 });
@@ -57,7 +58,7 @@ export async function POST(request: Request) {
   if (!verification.ok) {
     const status = verification.reason === "Invalid signature" ? 401 : 400;
     if (!strictSignature) {
-      console.warn("[paytr.webhook] verification failed", verification.reason);
+      logger.warn("paytr.webhook.verification_failed", { reason: verification.reason });
       return okResponse();
     }
     return NextResponse.json({ ok: false, error: verification.reason }, { status });
@@ -78,7 +79,7 @@ export async function POST(request: Request) {
     const existing = await getOrderByMerchantId(verification.merchantOrderId);
     if (existing) {
       if (existing.payment_status === "paid" || existing.claimStatus === "claimed") {
-        console.log("[paytr.webhook]", {
+        logger.info("paytr.webhook.duplicate", {
           merchant_oid: verification.merchantOrderId,
           status: verification.status,
           amount: verification.paymentAmount ?? verification.totalAmount,
@@ -90,7 +91,7 @@ export async function POST(request: Request) {
         return okResponse();
       }
       if (existing.payment_status === "failed" && verification.status === "success") {
-        console.log("[paytr.webhook]", {
+        logger.info("paytr.webhook.success_after_failed", {
           merchant_oid: verification.merchantOrderId,
           status: verification.status,
           amount: verification.paymentAmount ?? verification.totalAmount,
@@ -116,7 +117,7 @@ export async function POST(request: Request) {
           amountTry: String(incomingAmount),
           payment_status: "FLAGGED_AMOUNT_MISMATCH",
         });
-        console.log("[paytr.webhook]", {
+        logger.warn("paytr.webhook.amount_mismatch", {
           merchant_oid: verification.merchantOrderId,
           status: verification.status,
           amount: incomingAmount,
@@ -133,7 +134,7 @@ export async function POST(request: Request) {
     }
 
     if (verification.status !== "success") {
-      console.log("[paytr.webhook]", {
+      logger.info("paytr.webhook.non_success", {
         merchant_oid: verification.merchantOrderId,
         status: verification.status,
         amount: verification.paymentAmount ?? verification.totalAmount,
@@ -170,7 +171,7 @@ export async function POST(request: Request) {
     );
 
     if (result.status === "processed" || result.status === "duplicate") {
-      console.log("[paytr.webhook]", {
+      logger.info("paytr.webhook.processed", {
         merchant_oid: verification.merchantOrderId,
         status: verification.status,
         amount: verification.paymentAmount ?? verification.totalAmount,
@@ -180,7 +181,7 @@ export async function POST(request: Request) {
       });
       return okResponse();
     }
-    console.log("[paytr.webhook]", {
+    logger.info("paytr.webhook.pending", {
       merchant_oid: verification.merchantOrderId,
       status: verification.status,
       amount: verification.paymentAmount ?? verification.totalAmount,

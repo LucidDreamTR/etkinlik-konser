@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { createPublicClient, encodePacked, getAddress, http, verifyTypedData } from "viem";
+import { kv } from "@vercel/kv";
+import { createPublicClient, encodePacked, getAddress, http, recoverTypedDataAddress, verifyTypedData } from "viem";
 
 import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
 import { getTicketTypeConfig } from "@/data/ticketMetadata";
@@ -7,6 +7,13 @@ import { getOrderByMerchantId, recordPaidOrder } from "@/src/lib/ordersStore";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { purchaseOnchain } from "@/src/server/onchainPurchase";
+import { getServerEnv } from "@/src/lib/env";
+import { jsonNoStore } from "@/src/lib/http";
+import { emitMetric } from "@/src/lib/metrics";
+import { getChainConfig } from "@/src/lib/chain";
+import { logger } from "@/src/lib/logger";
+import { isProdDebugEnabled } from "@/src/lib/debug";
+import { createRateLimiter } from "@/src/server/rateLimit";
 
 type TicketIntent = {
   buyer: string;
@@ -37,7 +44,19 @@ const INTENT_TYPES = {
   ],
 } as const;
 
-const RPC_URL = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8545";
+const env = getServerEnv();
+const chain = getChainConfig();
+const RPC_URL = chain.rpcUrl;
+const debugEnabled = isProdDebugEnabled();
+const PURCHASE_LOCK_TTL_SECONDS = 120;
+const hasKv = Boolean(env.KV_REST_API_URL && env.KV_REST_API_TOKEN);
+const purchaseLimiter = createRateLimiter({ max: 10, windowMs: 60_000 });
+
+function getClientIp(headers: Headers): string {
+  const forwarded = headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0]?.trim() || "unknown";
+  return headers.get("x-real-ip") || "unknown";
+}
 
 function normalizeBigInt(value: TicketIntent["eventId"]): bigint {
   if (typeof value === "bigint") return value;
@@ -80,9 +99,33 @@ async function resolveNextTokenId(): Promise<bigint> {
 }
 
 export async function POST(request: Request) {
+  const clientIp = getClientIp(request.headers);
+  const startedAt = Date.now();
+  let lockKey: string | null = null;
   try {
-    if (!process.env.BACKEND_WALLET_PRIVATE_KEY) {
-      return NextResponse.json(
+    if (env.VERCEL_ENV === "production" && !env.FEATURE_TICKETING_ENABLED) {
+      return jsonNoStore(
+        { ok: false, error: "Ticketing temporarily disabled" },
+        { status: 503 }
+      );
+    }
+
+    const rate = purchaseLimiter(clientIp);
+    if (!rate.ok) {
+      const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
+      emitMetric(
+        "rate_limit_hit",
+        { route: "/api/tickets/purchase", ip: clientIp, reason: "rate_limited" },
+        Date.now() - startedAt
+      );
+      return jsonNoStore(
+        { ok: false, error: "Rate limit exceeded" },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
+    }
+
+    if (!env.BACKEND_WALLET_PRIVATE_KEY) {
+      return jsonNoStore(
         {
           ok: false,
           error: "Missing env: BACKEND_WALLET_PRIVATE_KEY (server-only, required for minting)",
@@ -93,14 +136,14 @@ export async function POST(request: Request) {
 
     const raw = await request.text();
     if (!raw) {
-      return NextResponse.json({ ok: false, error: "Empty body" }, { status: 400 });
+      return jsonNoStore({ ok: false, error: "Empty body" }, { status: 400 });
     }
 
     let payload: PurchasePayload;
     try {
       payload = JSON.parse(raw) as PurchasePayload;
     } catch (error) {
-      return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 });
+      return jsonNoStore({ ok: false, error: "Invalid JSON" }, { status: 400 });
     }
 
     const intent = payload.intent;
@@ -108,46 +151,40 @@ export async function POST(request: Request) {
 
     if (!intent) {
       if (payload.intentId || payload.merchantOrderId) {
-        return NextResponse.json(
+        return jsonNoStore(
           { ok: false, error: "Purchase requires intent payload and signature" },
           { status: 400 }
         );
       }
-      return NextResponse.json({ ok: false, error: "Missing intent" }, { status: 400 });
+      return jsonNoStore({ ok: false, error: "Missing intent" }, { status: 400 });
     }
 
     if (!signature || !signature.trim()) {
-      return NextResponse.json({ ok: false, error: "Missing signature" }, { status: 400 });
+      return jsonNoStore({ ok: false, error: "Missing signature" }, { status: 400 });
     }
     const normalizedSig = signature.trim();
     if (!/^0x[0-9a-fA-F]{130}$/.test(normalizedSig)) {
-      return NextResponse.json({ ok: false, error: "Invalid signature" }, { status: 401 });
+      return jsonNoStore({ ok: false, error: "Invalid signature" }, { status: 401 });
     }
 
     let buyerChecksumForMessage: `0x${string}`;
     try {
       buyerChecksumForMessage = getAddress(String(intent.buyer));
     } catch {
-      return NextResponse.json(
-        { ok: false, error: "Invalid buyer before verifyTypedData", buyer: intent?.buyer ?? null },
-        { status: 400 }
-      );
+      return jsonNoStore({ ok: false, error: "Invalid buyer before verifyTypedData" }, { status: 400 });
     }
 
     let verifyingContract: `0x${string}`;
     try {
       verifyingContract = getTicketContractAddress({ server: true });
     } catch {
-      return NextResponse.json(
-        { ok: false, error: "Invalid verifyingContract", verifyingContract: null },
-        { status: 400 }
-      );
+      return jsonNoStore({ ok: false, error: "Invalid verifyingContract" }, { status: 400 });
     }
 
     const domain = {
       name: "EtkinlikKonser",
       version: "1",
-      chainId: 11155111,
+      chainId: chain.chainId,
       verifyingContract,
     } as const;
 
@@ -170,14 +207,35 @@ export async function POST(request: Request) {
     });
 
     if (!verified) {
-      return NextResponse.json({ ok: false, error: "Invalid signature" }, { status: 401 });
+      let recoveredSigner: string | null = null;
+      if (debugEnabled) {
+        try {
+          recoveredSigner = await recoverTypedDataAddress({
+            domain,
+            types: INTENT_TYPES,
+            primaryType: "TicketIntent",
+            message,
+            signature: normalizedSig as `0x${string}`,
+          });
+        } catch {
+          recoveredSigner = null;
+        }
+      }
+      return jsonNoStore(
+        {
+          ok: false,
+          error: "Invalid signature",
+          ...(debugEnabled ? { recoveredSigner, expectedBuyer: message.buyer } : {}),
+        },
+        { status: 401 }
+      );
     }
 
     const paymentIntentId = intent.merchantOrderId;
     const eventIdNormalized = normalizeBigInt(intent.eventId);
     const eventIdNumber = Number(eventIdNormalized);
     if (!Number.isFinite(eventIdNumber)) {
-      return NextResponse.json({ ok: false, error: "Invalid eventId" }, { status: 400 });
+      return jsonNoStore({ ok: false, error: "Invalid eventId" }, { status: 400 });
     }
     const ticketTypeRaw = normalizeString(intent.ticketType);
     const seatRaw = normalizeString(intent.seat);
@@ -190,11 +248,56 @@ export async function POST(request: Request) {
     const orderId = hashPaymentPreimage(paymentPreimage);
 
     const existing = await getOrderByMerchantId(paymentIntentId);
-    if (existing) {
-      if (existing.txHash) {
-        return NextResponse.json({ ok: true, status: "duplicate", txHash: existing.txHash, paymentIntentId, orderId });
+    if (existing?.txHash) {
+      if (debugEnabled) {
+        logger.info("purchase.duplicate", {
+          merchantOrderId: paymentIntentId,
+          orderId,
+          txHash: existing.txHash,
+          tokenId: existing.tokenId ?? null,
+        });
       }
-      return NextResponse.json({ ok: true, status: "duplicate", paymentIntentId, orderId });
+      emitMetric(
+        "purchase_duplicate",
+        { route: "/api/tickets/purchase", merchantOrderId: paymentIntentId, ip: clientIp },
+        Date.now() - startedAt
+      );
+      return jsonNoStore({
+        ok: true,
+        status: "duplicate",
+        txHash: existing.txHash,
+        paymentIntentId,
+        orderId,
+        ...(debugEnabled ? { existingHadTxHash: true, lockHit: false } : {}),
+      });
+    }
+    // NOTE: existing record without txHash is a pending intent -> continue processing.
+
+    if (hasKv) {
+      lockKey = `purchase:lock:${paymentIntentId}`;
+      const acquired = await kv.set(lockKey, "1", { nx: true, ex: PURCHASE_LOCK_TTL_SECONDS });
+      if (!acquired) {
+        if (debugEnabled) {
+          logger.info("purchase.pending", { merchantOrderId: paymentIntentId, orderId });
+        }
+        emitMetric(
+          "lock_hit",
+          { route: "/api/tickets/purchase", merchantOrderId: paymentIntentId, ip: clientIp },
+          Date.now() - startedAt
+        );
+        emitMetric(
+          "purchase_pending",
+          { route: "/api/tickets/purchase", merchantOrderId: paymentIntentId, ip: clientIp },
+          Date.now() - startedAt
+        );
+        return jsonNoStore({
+          ok: true,
+          status: "pending",
+          paymentIntentId,
+          orderId,
+          ...(debugEnabled ? { existingHadTxHash: false, lockHit: true } : {}),
+        });
+      }
     }
 
     const appUrl = getPublicBaseUrl();
@@ -202,22 +305,57 @@ export async function POST(request: Request) {
     try {
       nextTokenId = await resolveNextTokenId();
     } catch {
-      return NextResponse.json({ ok: false, error: "Failed to read nextTokenId()" }, { status: 500 });
+      return jsonNoStore({ ok: false, error: "Failed to read nextTokenId()" }, { status: 500 });
     }
     const tokenUri = `${appUrl}/api/metadata/ticket/${eventIdNormalized.toString()}?tokenId=${nextTokenId.toString()}`;
 
-    const onchain = await purchaseOnchain({
-      orderId,
-      splitSlug: intent.splitSlug,
-      eventId: intent.eventId,
-      amountTry: intent.amountWei.toString(),
-      amountWei: intent.amountWei,
-      buyerAddress: buyerChecksumForMessage,
-      uri: tokenUri,
-    });
+    let onchain: Awaited<ReturnType<typeof purchaseOnchain>>;
+    try {
+      onchain = await purchaseOnchain({
+        orderId,
+        splitSlug: intent.splitSlug,
+        eventId: intent.eventId,
+        amountTry: intent.amountWei.toString(),
+        amountWei: intent.amountWei,
+        buyerAddress: buyerChecksumForMessage,
+        uri: tokenUri,
+      });
+    } catch (error) {
+      const err = error as Error & { stage?: string; rpcErrorCode?: unknown };
+      if (lockKey) {
+        await kv.del(lockKey).catch(() => {});
+      }
+      return jsonNoStore(
+        {
+          ok: false,
+          error: err.message || "Onchain error",
+          ...(debugEnabled
+            ? {
+                txStage: err.stage ?? null,
+                rpcErrorCode: err.rpcErrorCode ?? null,
+              }
+            : {}),
+        },
+        { status: 500 }
+      );
+    }
 
     if ("alreadyUsed" in onchain && onchain.alreadyUsed) {
-      return NextResponse.json({ ok: true, status: "duplicate", paymentIntentId, orderId });
+      if (lockKey) {
+        await kv.del(lockKey).catch(() => {});
+      }
+      emitMetric(
+        "purchase_duplicate",
+        { route: "/api/tickets/purchase", merchantOrderId: paymentIntentId, ip: clientIp },
+        Date.now() - startedAt
+      );
+      return jsonNoStore({
+        ok: true,
+        status: "duplicate",
+        paymentIntentId,
+        orderId,
+        ...(debugEnabled ? { existingHadTxHash: false, lockHit: false } : {}),
+      });
     }
 
     await recordPaidOrder({
@@ -244,15 +382,35 @@ export async function POST(request: Request) {
       claimedAt: new Date().toISOString(),
     });
 
-    return NextResponse.json({
+    if (debugEnabled) {
+      logger.info("purchase.processed", {
+        merchantOrderId: paymentIntentId,
+        orderId,
+        txHash: onchain.txHash,
+        tokenId: onchain.tokenId ?? null,
+      });
+    }
+    if (lockKey) {
+      await kv.del(lockKey).catch(() => {});
+    }
+    emitMetric(
+      "purchase_processed",
+      { route: "/api/tickets/purchase", merchantOrderId: paymentIntentId, ip: clientIp },
+      Date.now() - startedAt
+    );
+    return jsonNoStore({
       ok: true,
       status: "processed",
       txHash: onchain.txHash,
       paymentIntentId,
       orderId,
+      ...(debugEnabled ? { existingHadTxHash: false, lockHit: false } : {}),
     });
   } catch (error) {
+    if (lockKey) {
+      await kv.del(lockKey).catch(() => {});
+    }
     const message = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return jsonNoStore({ ok: false, error: message }, { status: 500 });
   }
 }
