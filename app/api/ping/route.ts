@@ -1,10 +1,8 @@
 export const runtime = "nodejs";
 
-const BUILD_SHA = "914efff";
-
 export async function GET() {
   return Response.json(
-    { ok: true, v: BUILD_SHA },
+    { ok: true, v: "f7d9db9" },
     {
       status: 200,
       headers: {

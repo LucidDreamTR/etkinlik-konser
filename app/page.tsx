@@ -22,7 +22,7 @@ export default function Home() {
       <Demo />
       <WhitePaper />
       <Footer />
-      <div className="px-6 pb-6 text-xs text-white/40">BUILD 914efff</div>
+      <div className="px-6 pb-6 text-xs text-white/40">BUILD f7d9db9</div>
     </div>
   );
 }
