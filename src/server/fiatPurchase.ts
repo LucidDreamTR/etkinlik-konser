@@ -115,9 +115,6 @@ export async function purchaseWithFiat({
   const nextTokenId = await resolveNextTokenId(nftAddress);
   const tokenUri = `${appUrl}/api/metadata/ticket/${normalizedEventId.toString()}?tokenId=${nextTokenId.toString()}`;
 
-  const txHash: Hex = await walletClient.writeContract(request);
-  const receipt: Awaited<ReturnType<typeof publicClient.waitForTransactionReceipt>> =
-    await publicClient.waitForTransactionReceipt({ hash: txHash });
   // Simulate and execute the safeMint transaction
   const { request } = await publicClient.simulateContract({
     account,
@@ -136,6 +133,9 @@ export async function purchaseWithFiat({
   }
 
   // Find the tokenId from the Transfer event emitted by the ERC721 contract
+  const txHash: Hex = await walletClient.writeContract(request);
+  const receipt: Awaited<ReturnType<typeof publicClient.waitForTransactionReceipt>> =
+    await publicClient.waitForTransactionReceipt({ hash: txHash });
   const logs = receipt.logs.filter((log) => getAddress(log.address) === nftAddress);
   const parsed = parseEventLogs({ abi: eventTicketAbi, eventName: "Transfer", logs });
   const minted = parsed.find((entry) => entry.args.from === "0x0000000000000000000000000000000000000000");
