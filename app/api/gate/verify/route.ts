@@ -398,8 +398,8 @@ export async function POST(request: Request) {
     }
 
     const order = await getOrderByTokenId(tokenIdString);
-    let claimedToStored: string | null = order?.claimedTo ?? null;
-    let claimedToOnchain: string | null = owner ?? null;
+    const claimedToStored: string | null = order?.claimedTo ?? null;
+    const claimedToOnchain: string | null = owner ?? null;
     let claimedToMismatchHealed = false;
     if (order?.claimedTo && owner) {
       try {

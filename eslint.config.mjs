@@ -6,7 +6,7 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   {
-    ignorePatterns: ["contracts/**", "artifacts/**", "cache/**", "lib/**", "node_modules/**"],
+    ignores: ["contracts/**", "artifacts/**", "cache/**", "lib/**", "node_modules/**", "scripts/**"],
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([
