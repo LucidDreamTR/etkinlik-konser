@@ -7,6 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "hh:compile": "hardhat compile",
+    "hh:deploy:sepolia": "hardhat run scripts/deploy.ts --network sepolia",
+    "hh:deploy:mainnet": "hardhat run scripts/deploy.ts --network mainnet",
+    "hh:verify": "hardhat verify",
     "init:splits": "node scripts/init-local-splits.mjs",
     "security:check": "node scripts/security-check.mjs"
   },

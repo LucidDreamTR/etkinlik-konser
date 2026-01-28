@@ -22,9 +22,19 @@ function resolveBackendAddress(): string | null {
 async function main() {
   const [deployer] = await hre.ethers.getSigners();
   const network = await hre.ethers.provider.getNetwork();
+  const chainId = Number(network.chainId);
+
+  if (chainId === 1) {
+    const mainnetEnabled = process.env.MAINNET_ENABLED === "true";
+    const confirmed = process.env.CONFIRM_MAINNET_DEPLOY === "true";
+    if (!mainnetEnabled || !confirmed) {
+      console.warn("WARN: Mainnet deploy blocked. Set MAINNET_ENABLED=true and CONFIRM_MAINNET_DEPLOY=true to proceed.");
+      return;
+    }
+  }
 
   console.log("Deploying with:", deployer.address);
-  console.log("ChainId:", Number(network.chainId));
+  console.log("ChainId:", chainId);
 
   const EventTicket = await hre.ethers.getContractFactory("EventTicket");
   const eventTicket = await EventTicket.deploy("EventTicket", "EVT", deployer.address);
@@ -44,6 +54,13 @@ async function main() {
   } else {
     console.log("MINTER_ROLE not granted (missing BACKEND_WALLET_ADDRESS or BACKEND_WALLET_PRIVATE_KEY)");
   }
+
+  console.log("----- DEPLOY OUTPUT -----");
+  console.log("CHAIN_ID=", chainId);
+  console.log("EVENT_TICKET_ADDRESS=", await eventTicket.getAddress());
+  console.log("DEPLOY_TX=", deployTx?.hash ?? "unknown");
+  console.log("DEPLOYER_ADDRESS=", deployer.address);
+  console.log("BACKEND_MINTER_ADDRESS=", backendAddress ?? "not_granted");
 }
 
 main().catch((error) => {

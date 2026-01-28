@@ -36,6 +36,8 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 - `RELAYER_PRIVATE_KEY`
 - `CUSTODY_ADDRESS` (optional; defaults to relayer)
 - `RPC_URL` (server-side RPC; can match selected NEXT_PUBLIC_RPC_URL_*)
+- `MAINNET_RPC_URL` (Hardhat deploys)
+- `DEPLOYER_PRIVATE_KEY` (Hardhat deploys)
 
 ### Public (NEXT_PUBLIC)
 - `NEXT_PUBLIC_CHAIN_ID`

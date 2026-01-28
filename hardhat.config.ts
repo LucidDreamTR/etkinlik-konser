@@ -22,6 +22,11 @@ const config: HardhatUserConfig = {
       chainId: 11155111,
       accounts: pk ? [pk] : [],
     },
+    mainnet: {
+      url: process.env.MAINNET_RPC_URL || process.env.ETHEREUM_TX_RPC_URL || "",
+      chainId: 1,
+      accounts: pk ? [pk] : [],
+    },
   },
 };
 

@@ -22,6 +22,8 @@ Set in **Production** unless noted.
 - `ALLOW_UNSIGNED_INTENT` (default false)
 - `FEATURE_TICKETING_ENABLED` (default true)
 - `MAINNET_ENABLED` (default false)
+- `MAINNET_RPC_URL` (for Hardhat mainnet deploys)
+- `DEPLOYER_PRIVATE_KEY` (for Hardhat deploys)
 
 ### Vercel-provided
 - `VERCEL_ENV`

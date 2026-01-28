@@ -30,6 +30,7 @@ TicketSale zincirde event konfigürasyonu tutmaz. Event durumu ve fiyat doğrula
 - `docs/architecture-legend.md`
 - `docs/prod-security-checklist.md`
 - `docs/prod-deploy-checklist.md`
+- `docs/mainnet-deploy.md`
 - `docs/operator-runbook.md`
 - `docs/ops-visibility.md`
 - `docs/security.md`
