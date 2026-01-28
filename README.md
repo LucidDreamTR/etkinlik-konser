@@ -26,13 +26,14 @@ TicketSale zincirde event konfigürasyonu tutmaz. Event durumu ve fiyat doğrula
 
 ## Production docs
 
+- `docs/architecture.md`
+- `docs/architecture-legend.md`
 - `docs/prod-security-checklist.md`
 - `docs/prod-deploy-checklist.md`
-- `docs/rollback-plan.md`
-- `docs/architecture.md`
 - `docs/operator-runbook.md`
 - `docs/ops-visibility.md`
 - `docs/security.md`
+- `docs/rollback-plan.md`
 
 ## Local seeding
 
