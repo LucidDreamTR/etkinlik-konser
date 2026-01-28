@@ -41,12 +41,13 @@ sequenceDiagram
   API->>Sepolia: paymentIdOf(tokenId)
   Sepolia-->>API: paymentId (bytes32)
   API->>API: compare paymentId == orderId
-  API->>Sepolia: claim(tokenId) [best-effort]
+  API->>Sepolia: claim(tokenId) [optional, only if supported by contract]
   API->>Sepolia: safeTransferFrom(custody, buyer, tokenId)
   Sepolia-->>API: claim tx + transfer tx
   API->>KV: mark OrderStore claimed + claimedTo + timestamps
   API-->>Client: status=claimed|pending|error
 ```
+In the current production flow, custody → buyer transfer is the canonical operation. A separate `claim()` call is optional and only executed if the deployed contract exposes and requires it.
 
 ## Gate Verify Flow (One-time Scan)
 ```mermaid
@@ -67,8 +68,10 @@ sequenceDiagram
   Sepolia-->>API: owner + claimed + paymentId
   API->>API: compare paymentId == expected hash
   API->>KV: mark used:token:<tokenId> (NX)
-  API-->>Operator: valid | invalid_code | not_owner | already_claimed | rate_limited | lock_hit
+  API-->>Operator: valid | invalid_code | payment_mismatch | not_owner | already_claimed | rate_limited | lock_hit
 ```
+`payment_mismatch` indicates that the normalized QR/hash does not match `paymentIdOf(tokenId)` on-chain.
+Note: `used:token:<tokenId>` is an optional off-chain replay-protection layer. The primary source of truth remains the on-chain `claimed` flag. This KV marker is considered future hardening and MAY be disabled without affecting correctness.
 
 ## Components & Trust Boundaries
 ```mermaid
