@@ -4,13 +4,16 @@
 Set in **Production** unless noted.
 
 ### Public
-- `NEXT_PUBLIC_RPC_URL`
-- `NEXT_PUBLIC_CHAIN_ID` (e.g., `11155111` for Sepolia)
-- `NEXT_PUBLIC_TICKET_SALE_ADDRESS`
-- `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS`
+- `NEXT_PUBLIC_CHAIN_ID` (`11155111` for Sepolia, `1` for Mainnet)
+- `NEXT_PUBLIC_RPC_URL_SEPOLIA`
+- `NEXT_PUBLIC_TICKET_SALE_ADDRESS_SEPOLIA`
+- `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA`
+- `NEXT_PUBLIC_RPC_URL_MAINNET` (Mainnet day only)
+- `NEXT_PUBLIC_TICKET_SALE_ADDRESS_MAINNET` (Mainnet day only)
+- `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET` (Mainnet day only)
 
 ### Server
-- `RPC_URL` (server-side RPC; can match `NEXT_PUBLIC_RPC_URL`)
+- `RPC_URL` (server-side RPC; can match selected NEXT_PUBLIC_RPC_URL_*)
 - `KV_REST_API_URL`
 - `KV_REST_API_TOKEN`
 - `BACKEND_WALLET_PRIVATE_KEY`
@@ -18,6 +21,7 @@ Set in **Production** unless noted.
 - `ENABLE_PROD_DEBUG` (default false)
 - `ALLOW_UNSIGNED_INTENT` (default false)
 - `FEATURE_TICKETING_ENABLED` (default true)
+- `MAINNET_ENABLED` (default false)
 
 ### Vercel-provided
 - `VERCEL_ENV`
@@ -34,9 +38,10 @@ Set in **Production** unless noted.
 - [ ] `npm run lint` passes locally.
 
 ## Chain Configuration
-- [ ] `NEXT_PUBLIC_CHAIN_ID` matches the target chain.
-- [ ] `NEXT_PUBLIC_RPC_URL` points to a stable provider.
-- [ ] Contract addresses match the target chain (Sepolia for staging/test).
+- [ ] `MAINNET_ENABLED=false` with `NEXT_PUBLIC_CHAIN_ID=11155111` for Sepolia.
+- [ ] `MAINNET_ENABLED=true` with `NEXT_PUBLIC_CHAIN_ID=1` for Mainnet.
+- [ ] Selected `NEXT_PUBLIC_RPC_URL_*` points to a stable provider.
+- [ ] Contract addresses match the target chain.
 - [ ] `getChainConfig()` does not throw in production.
 
 ## Health & Versioning

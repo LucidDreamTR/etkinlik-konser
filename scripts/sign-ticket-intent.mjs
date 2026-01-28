@@ -9,29 +9,34 @@ import { privateKeyToAccount } from 'viem/accounts'
 const {
   RELAYER_PRIVATE_KEY,
   NEXT_PUBLIC_CHAIN_ID,
-  NEXT_PUBLIC_RPC_URL,
-  NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS,
-  TICKET_SALE_ADDRESS,
-  NEXT_PUBLIC_TICKET_SALE_ADDRESS,
+  NEXT_PUBLIC_RPC_URL_SEPOLIA,
+  NEXT_PUBLIC_RPC_URL_MAINNET,
+  NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA,
+  NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET,
   BUYER,
   SPLIT_SLUG,
   PAYMENT_INTENT_ID,
   EVENT_ID,
   AMOUNT_WEI,
   DEADLINE,
+  MAINNET_ENABLED,
 } = process.env
 
 if (!RELAYER_PRIVATE_KEY) throw new Error('Missing RELAYER_PRIVATE_KEY in env')
-if (!NEXT_PUBLIC_RPC_URL) throw new Error('Missing NEXT_PUBLIC_RPC_URL in env')
 if (!NEXT_PUBLIC_CHAIN_ID) throw new Error('Missing NEXT_PUBLIC_CHAIN_ID in env')
 if (!BUYER || !SPLIT_SLUG || !PAYMENT_INTENT_ID || !EVENT_ID || !AMOUNT_WEI || !DEADLINE) {
   throw new Error('Missing required envs (BUYER/SPLIT_SLUG/PAYMENT_INTENT_ID/EVENT_ID/AMOUNT_WEI/DEADLINE)')
 }
 
-const verifyingContractRaw =
-  NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS || TICKET_SALE_ADDRESS || NEXT_PUBLIC_TICKET_SALE_ADDRESS
+const mainnetEnabled = MAINNET_ENABLED === 'true'
+const rpcUrl = mainnetEnabled ? NEXT_PUBLIC_RPC_URL_MAINNET : NEXT_PUBLIC_RPC_URL_SEPOLIA
+if (!rpcUrl) throw new Error('Missing network-specific RPC URL env')
+
+const verifyingContractRaw = mainnetEnabled
+  ? NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET
+  : NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA
 if (!verifyingContractRaw) {
-  throw new Error('Missing NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS (or legacy TICKET_SALE_ADDRESS) in env')
+  throw new Error('Missing network-specific ticket contract address env')
 }
 
 const verifyingContract = getAddress(verifyingContractRaw)
@@ -41,7 +46,7 @@ const account = privateKeyToAccount(RELAYER_PRIVATE_KEY)
 
 const client = createWalletClient({
   account,
-  transport: http(NEXT_PUBLIC_RPC_URL),
+  transport: http(rpcUrl),
 })
 
 const domain = {

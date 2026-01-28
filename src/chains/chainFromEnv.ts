@@ -6,7 +6,7 @@ export function getPublicChainId(): number {
   const raw = process.env.NEXT_PUBLIC_CHAIN_ID;
   const parsed = raw ? Number(raw) : NaN;
   if (!Number.isNaN(parsed) && parsed > 0) return parsed;
-  return 31337;
+  return 11155111;
 }
 
 export function resolvePublicChain() {

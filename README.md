@@ -38,6 +38,7 @@ TicketSale zincirde event konfigürasyonu tutmaz. Event durumu ve fiyat doğrula
 ## Supported networks
 - Default: Sepolia or Holesky (testnets).
 - Mainnet requires `MAINNET_ENABLED=true` and `NEXT_PUBLIC_CHAIN_ID=1`.
+ - Network-specific env vars required: `NEXT_PUBLIC_RPC_URL_SEPOLIA` / `NEXT_PUBLIC_RPC_URL_MAINNET` and matching TicketSale/EventTicket addresses.
 
 ## Local seeding
 

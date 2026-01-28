@@ -4,8 +4,9 @@ import { createPublicClient, getAddress, http, keccak256, toBytes } from "viem";
 import { normalizeSplitSlug } from "@/lib/events";
 import { payoutDistributorAbi } from "@/src/contracts/payoutDistributor.abi";
 import { requireDebugAccess } from "@/src/server/debugFlags";
+import { getChainConfig } from "@/src/lib/chain";
 
-const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8545";
+const RPC_URL = getChainConfig().rpcUrl;
 
 function hashSplitId(value: string) {
   return keccak256(toBytes(normalizeSplitSlug(value)));

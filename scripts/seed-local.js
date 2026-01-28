@@ -27,8 +27,7 @@ async function main() {
 
   console.log(`NEXT_PUBLIC_PAYOUT_DISTRIBUTOR_ADDRESS=${await distributor.getAddress()}`);
   console.log(`NEXT_PUBLIC_TICKET_NFT_ADDRESS=${await ticket.getAddress()}`);
-  console.log(`NEXT_PUBLIC_TICKET_SALE_ADDRESS=${await sale.getAddress()}`);
-  console.log(`TICKET_SALE_ADDRESS=${await sale.getAddress()}`);
+  console.log(`NEXT_PUBLIC_TICKET_SALE_ADDRESS_LOCAL=${await sale.getAddress()}`);
 }
 
 main().catch((error) => {

@@ -7,8 +7,6 @@ import { getServerEnv } from "./env";
 const CHAIN_META: Record<number, { name: string; explorerBase: string }> = {
   1: { name: "mainnet", explorerBase: "https://etherscan.io" },
   11155111: { name: "sepolia", explorerBase: "https://sepolia.etherscan.io" },
-  17000: { name: "holesky", explorerBase: "https://holesky.etherscan.io" },
-  31337: { name: "anvil", explorerBase: "" },
 };
 
 export type ChainConfig = {
@@ -30,9 +28,9 @@ export function getChainConfig(): ChainConfig {
   const env = getServerEnv();
   const chainIdRaw = env.NEXT_PUBLIC_CHAIN_ID ? Number(env.NEXT_PUBLIC_CHAIN_ID) : 11155111;
   const chainId = Number.isFinite(chainIdRaw) ? chainIdRaw : 11155111;
-  const rpcUrl = env.RPC_URL ?? env.NEXT_PUBLIC_RPC_URL;
+  const rpcUrl = env.RPC_URL ?? (env.MAINNET_ENABLED ? env.NEXT_PUBLIC_RPC_URL_MAINNET : env.NEXT_PUBLIC_RPC_URL_SEPOLIA);
   if (!rpcUrl) {
-    throw new Error("Missing RPC_URL or NEXT_PUBLIC_RPC_URL");
+    throw new Error("Missing RPC_URL or network-specific NEXT_PUBLIC_RPC_URL");
   }
 
   const meta = CHAIN_META[chainId] ?? { name: "unknown", explorerBase: "" };
@@ -40,13 +38,8 @@ export function getChainConfig(): ChainConfig {
     if (chainId !== 1) {
       throw new Error("MAINNET_ENABLED=true requires chainId=1.");
     }
-  } else {
-    if (chainId === 1) {
-      throw new Error("Mainnet is disabled. Set MAINNET_ENABLED=true to allow chainId=1.");
-    }
-    if (env.VERCEL_ENV === "production" && meta.name === "unknown") {
-      throw new Error(`Unsupported chainId in production: ${chainId}`);
-    }
+  } else if (chainId !== 11155111) {
+    throw new Error("MAINNET_ENABLED=false requires chainId=11155111.");
   }
 
   return {
@@ -54,7 +47,13 @@ export function getChainConfig(): ChainConfig {
     chainName: meta.name,
     rpcUrl,
     explorerBase: meta.explorerBase,
-    ticketSaleAddress: normalizeAddress(env.NEXT_PUBLIC_TICKET_SALE_ADDRESS),
-    ticketContractAddress: normalizeAddress(env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS),
+    ticketSaleAddress: normalizeAddress(
+      env.MAINNET_ENABLED ? env.NEXT_PUBLIC_TICKET_SALE_ADDRESS_MAINNET : env.NEXT_PUBLIC_TICKET_SALE_ADDRESS_SEPOLIA
+    ),
+    ticketContractAddress: normalizeAddress(
+      env.MAINNET_ENABLED
+        ? env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET
+        : env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA
+    ),
   };
 }

@@ -19,9 +19,12 @@ const boolFromEnv = (defaultValue: boolean) =>
   }, z.boolean());
 
 const serverEnvSchema = z.object({
-  NEXT_PUBLIC_RPC_URL: z.string().min(1),
-  NEXT_PUBLIC_TICKET_SALE_ADDRESS: z.string().min(1),
-  NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS: z.string().min(1),
+  NEXT_PUBLIC_RPC_URL_SEPOLIA: z.string().optional(),
+  NEXT_PUBLIC_RPC_URL_MAINNET: z.string().optional(),
+  NEXT_PUBLIC_TICKET_SALE_ADDRESS_SEPOLIA: z.string().optional(),
+  NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA: z.string().optional(),
+  NEXT_PUBLIC_TICKET_SALE_ADDRESS_MAINNET: z.string().optional(),
+  NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET: z.string().optional(),
   NEXT_PUBLIC_CHAIN_ID: z.string().optional(),
   KV_REST_API_URL: z.string().min(1),
   KV_REST_API_TOKEN: z.string().min(1),
@@ -69,10 +72,32 @@ export function getServerEnv(): ServerEnv {
     }
   }
 
+  const chainId = cachedEnv.NEXT_PUBLIC_CHAIN_ID ? Number(cachedEnv.NEXT_PUBLIC_CHAIN_ID) : 11155111;
   if (cachedEnv.MAINNET_ENABLED) {
-    const chainId = cachedEnv.NEXT_PUBLIC_CHAIN_ID ? Number(cachedEnv.NEXT_PUBLIC_CHAIN_ID) : 1;
     if (chainId !== 1) {
       throw new Error("MAINNET_ENABLED=true requires NEXT_PUBLIC_CHAIN_ID=1.");
+    }
+    if (!cachedEnv.NEXT_PUBLIC_RPC_URL_MAINNET) {
+      throw new Error("Missing env: NEXT_PUBLIC_RPC_URL_MAINNET");
+    }
+    if (!cachedEnv.NEXT_PUBLIC_TICKET_SALE_ADDRESS_MAINNET) {
+      throw new Error("Missing env: NEXT_PUBLIC_TICKET_SALE_ADDRESS_MAINNET");
+    }
+    if (!cachedEnv.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET) {
+      throw new Error("Missing env: NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET");
+    }
+  } else {
+    if (chainId !== 11155111) {
+      throw new Error("MAINNET_ENABLED=false requires NEXT_PUBLIC_CHAIN_ID=11155111.");
+    }
+    if (!cachedEnv.NEXT_PUBLIC_RPC_URL_SEPOLIA) {
+      throw new Error("Missing env: NEXT_PUBLIC_RPC_URL_SEPOLIA");
+    }
+    if (!cachedEnv.NEXT_PUBLIC_TICKET_SALE_ADDRESS_SEPOLIA) {
+      throw new Error("Missing env: NEXT_PUBLIC_TICKET_SALE_ADDRESS_SEPOLIA");
+    }
+    if (!cachedEnv.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA) {
+      throw new Error("Missing env: NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA");
     }
   }
 

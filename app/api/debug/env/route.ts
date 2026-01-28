@@ -10,14 +10,16 @@ export async function GET() {
   if (!requireDebugAccess()) {
     return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
   }
-  const publicContract = process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS?.trim();
-  const serverContract = process.env.TICKET_CONTRACT_ADDRESS?.trim();
-  const ticketContractRaw = publicContract || serverContract || null;
+  const mainnetEnabled = process.env.MAINNET_ENABLED === "true";
+  const publicContract = mainnetEnabled
+    ? process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET?.trim()
+    : process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA?.trim();
+  const ticketContractRaw = publicContract || null;
   const ticketContractKey = publicContract
-    ? "NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS"
-    : serverContract
-      ? "TICKET_CONTRACT_ADDRESS"
-      : null;
+    ? mainnetEnabled
+      ? "NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET"
+      : "NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA"
+    : null;
   const ticketContractLast4 = ticketContractRaw ? ticketContractRaw.slice(-4) : null;
   let publicBaseUrl: string | null = null;
   try {
@@ -34,5 +36,6 @@ export async function GET() {
     ticketContractSet: Boolean(ticketContractRaw),
     ticketContractLast4,
     ticketContractKey,
+    mainnetEnabled,
   });
 }

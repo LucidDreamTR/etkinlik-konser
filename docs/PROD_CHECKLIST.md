@@ -35,21 +35,24 @@ This checklist is a concrete, step-by-step plan to go from local → Sepolia →
 - `PAYTR_MERCHANT_ID`
 - `RELAYER_PRIVATE_KEY`
 - `CUSTODY_ADDRESS` (optional; defaults to relayer)
-- `RPC_URL` (fallback if `NEXT_PUBLIC_RPC_URL` is not set)
+- `RPC_URL` (server-side RPC; can match selected NEXT_PUBLIC_RPC_URL_*)
 
 ### Public (NEXT_PUBLIC)
-- `NEXT_PUBLIC_RPC_URL`
 - `NEXT_PUBLIC_CHAIN_ID`
-- `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS`
-- `NEXT_PUBLIC_TICKET_SALE_ADDRESS`
+- `NEXT_PUBLIC_RPC_URL_SEPOLIA`
+- `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA`
+- `NEXT_PUBLIC_TICKET_SALE_ADDRESS_SEPOLIA`
+- `NEXT_PUBLIC_RPC_URL_MAINNET` (Mainnet day only)
+- `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET` (Mainnet day only)
+- `NEXT_PUBLIC_TICKET_SALE_ADDRESS_MAINNET` (Mainnet day only)
 - `NEXT_PUBLIC_TICKET_NFT_ADDRESS`
 
-Active EventTicket address is the one that printed "MINTER_ROLE granted..." in deploy output; set it in `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS`.
+Active EventTicket address is the one that printed "MINTER_ROLE granted..." in deploy output; set it in the network-specific `NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_*`.
 - `NEXT_PUBLIC_PAYOUT_DISTRIBUTOR_ADDRESS`
 - `NEXT_PUBLIC_PAYOUT_SPLITTER_ADDRESS`
 
 ### Server + Public (both)
-- `TICKET_SALE_ADDRESS` (server reads; keep in sync with NEXT_PUBLIC)
+- `MAINNET_ENABLED` (false for Sepolia, true for Mainnet)
 
 ## PayTR production setup
 - Set callback URL to `/api/payments/webhook`
@@ -71,7 +74,7 @@ Active EventTicket address is the one that printed "MINTER_ROLE granted..." in d
 - Never log private keys or full signature payloads
 
 ## RPC strategy
-- Use `NEXT_PUBLIC_RPC_URL` as primary
+- Use `NEXT_PUBLIC_RPC_URL_SEPOLIA` / `NEXT_PUBLIC_RPC_URL_MAINNET` as primary
 - Set `RPC_URL` as server fallback
 - Use timeouts and retries (keep-alive, backoff)
 - Monitor RPC latency and error rate
@@ -130,7 +133,7 @@ Active EventTicket address is the one that printed "MINTER_ROLE granted..." in d
 - Temporarily disable webhook endpoint (edge routing / WAF rule)
 
 ## Mainnet readiness
-- Confirm chainId is correct in `NEXT_PUBLIC_CHAIN_ID`
+- Confirm chainId is correct in `NEXT_PUBLIC_CHAIN_ID` and `MAINNET_ENABLED` is set accordingly
 - Ensure EIP-712 `verifyingContract` points to Mainnet sale address
 - Fund relayer with sufficient ETH for peak load
 - Enable rate limiting / bot protection

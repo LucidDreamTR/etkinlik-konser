@@ -6,8 +6,9 @@ import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { requireEnv, validateServerEnv } from "@/src/server/env";
 import { logger } from "@/src/lib/logger";
+import { getChainConfig } from "@/src/lib/chain";
 
-const RPC_URL = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8545";
+const RPC_URL = getChainConfig().rpcUrl;
 
 type PurchaseArgs = {
   orderId: `0x${string}`;
@@ -61,8 +62,10 @@ export async function purchaseOnchain({
   validateServerEnv();
   if (process.env.NODE_ENV !== "production") {
     logger.info("onchain.env", {
-      NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS: process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS ?? "",
-      NEXT_PUBLIC_RPC_URL: process.env.NEXT_PUBLIC_RPC_URL ?? "",
+      NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET: process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_MAINNET ?? "",
+      NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA: process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS_SEPOLIA ?? "",
+      NEXT_PUBLIC_RPC_URL_MAINNET: process.env.NEXT_PUBLIC_RPC_URL_MAINNET ?? "",
+      NEXT_PUBLIC_RPC_URL_SEPOLIA: process.env.NEXT_PUBLIC_RPC_URL_SEPOLIA ?? "",
       RPC_URL: process.env.RPC_URL ?? "",
     });
   }

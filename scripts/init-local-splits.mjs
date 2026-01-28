@@ -27,7 +27,12 @@ function normalizeSplitSlug(value) {
 }
 
 function getRpcUrl() {
-  return process.env.NEXT_PUBLIC_RPC_URL ?? process.env.RPC_URL ?? "http://127.0.0.1:8545";
+  const mainnetEnabled = process.env.MAINNET_ENABLED === "true";
+  return (
+    process.env.RPC_URL ??
+    (mainnetEnabled ? process.env.NEXT_PUBLIC_RPC_URL_MAINNET : process.env.NEXT_PUBLIC_RPC_URL_SEPOLIA) ??
+    "http://127.0.0.1:8545"
+  );
 }
 
 function getRelayerAccount() {
@@ -40,8 +45,11 @@ function getRelayerAccount() {
 }
 
 function getTicketSaleAddress() {
-  const saleRaw = process.env.TICKET_SALE_ADDRESS ?? process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS;
-  if (!saleRaw) throw new Error("Missing TICKET_SALE_ADDRESS or NEXT_PUBLIC_TICKET_SALE_ADDRESS");
+  const mainnetEnabled = process.env.MAINNET_ENABLED === "true";
+  const saleRaw = mainnetEnabled
+    ? process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS_MAINNET
+    : process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS_SEPOLIA;
+  if (!saleRaw) throw new Error("Missing network-specific ticket sale address");
   return getAddress(saleRaw);
 }
 

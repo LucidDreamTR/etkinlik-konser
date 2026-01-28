@@ -2,9 +2,11 @@ import { getExplorerBase, getPublicChainId, resolvePublicChain } from "../chains
 
 const chainId = getPublicChainId();
 const ticketSaleAddress =
-  (chainId === 11155111
-    ? process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS_SEPOLIA ?? process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS
-    : process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS ?? process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS_LOCAL) ?? null;
+  (chainId === 1
+    ? process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS_MAINNET
+    : chainId === 11155111
+      ? process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS_SEPOLIA
+      : process.env.NEXT_PUBLIC_TICKET_SALE_ADDRESS_LOCAL) ?? null;
 
 export const TICKET_SALE_CHAIN = resolvePublicChain();
 export const TICKET_SALE_ADDRESS = ticketSaleAddress as `0x${string}` | null;

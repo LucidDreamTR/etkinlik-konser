@@ -1,6 +1,6 @@
 import { defineChain } from "viem";
 
-const LOCAL_RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8545";
+const LOCAL_RPC_URL = process.env.NEXT_PUBLIC_RPC_URL_LOCAL ?? "http://127.0.0.1:8545";
 
 export const anvilLocal = defineChain({
   id: 31337,

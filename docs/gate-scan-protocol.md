@@ -104,5 +104,5 @@ Verify a ticket at the gate using the QR preimage string. A valid scan is **one-
 ## Production Checklist
 - Env vars: `ENABLE_PROD_DEBUG=false`, `GATE_VERIFY_DEBUG=false`, `ALLOW_UNSIGNED_INTENT=false`.
 - KV required: Redis/Vercel KV configured (used for `used:token:{tokenId}`).
-- RPC required: `ETHEREUM_RPC_URL` (or `NEXT_PUBLIC_RPC_URL`) configured.
+- RPC required: `ETHEREUM_RPC_URL` (or network-specific `NEXT_PUBLIC_RPC_URL_*`) configured.
 - Rate limits: `/api/gate/verify` 30/min/IP; `/api/tickets/claim` 10/min/IP.

@@ -1,4 +1,6 @@
-import { getAddress } from "viem";
+import "server-only";
+
+import { getChainConfig } from "@/src/lib/chain";
 
 export function getPublicBaseUrl(): string {
   const site = process.env.NEXT_PUBLIC_SITE_URL?.trim();
@@ -19,12 +21,9 @@ export function getMetadataBase(): URL {
 }
 
 export function getTicketContractAddress(options?: { server?: boolean }): `0x${string}` {
-  const publicValue = process.env.NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS?.trim();
-  const serverValue = options?.server ? process.env.TICKET_CONTRACT_ADDRESS?.trim() : undefined;
-  const raw = publicValue || serverValue;
-  if (!raw) {
-    throw new Error("Missing env: NEXT_PUBLIC_TICKET_CONTRACT_ADDRESS");
+  const chain = getChainConfig();
+  if (!chain.ticketContractAddress) {
+    throw new Error("Missing ticket contract address for selected network.");
   }
-  const normalized = raw.startsWith("0x") ? raw : `0x${raw}`;
-  return getAddress(normalized);
+  return chain.ticketContractAddress;
 }

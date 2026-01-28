@@ -15,12 +15,13 @@ import { getTicketContractAddress } from "@/lib/site";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { getOrderByTokenId } from "@/src/lib/ordersStore";
+import { getChainConfig } from "@/src/lib/chain";
 
 export const dynamic = "force-dynamic";
 
-const RPC_URL = process.env.ETHEREUM_RPC_URL ?? process.env.NEXT_PUBLIC_RPC_URL ?? process.env.RPC_URL ?? "http://127.0.0.1:8545";
-const CHAIN_ID_RAW = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 11155111);
-const CHAIN_ID = Number.isFinite(CHAIN_ID_RAW) ? CHAIN_ID_RAW : 11155111;
+const chain = getChainConfig();
+const RPC_URL = chain.rpcUrl;
+const CHAIN_ID = chain.chainId;
 
 function escapeXml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
