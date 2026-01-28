@@ -63,6 +63,10 @@ function normalizeBigInt(value: TicketIntent["eventId"]): bigint {
   throw new Error("Invalid numeric value");
 }
 
+function errorResponse(reason: string, error: string, status: number, extra?: Record<string, unknown>) {
+  return jsonNoStore({ ok: false, reason, error, ...(extra ?? {}) }, { status });
+}
+
 export async function POST(request: Request) {
   const route = "/api/tickets/intent";
   const clientIp = getClientIp(request.headers);
@@ -77,28 +81,28 @@ export async function POST(request: Request) {
         { route, ip: clientIp, reason: "rate_limit", latencyMs: Date.now() - startedAt }
       );
       return jsonNoStore(
-        { ok: false, error: "Rate limit exceeded" },
+        { ok: false, reason: "rate_limited", error: "Rate limit exceeded" },
         { status: 429, headers: { "Retry-After": String(retryAfter) } }
       );
     }
 
     const raw = await request.text();
     if (!raw) {
-      return jsonNoStore({ ok: false, error: "Empty body" }, { status: 400 });
+      return errorResponse("empty_body", "Empty body", 400);
     }
 
     let payload: IntentPayload;
     try {
       payload = JSON.parse(raw) as IntentPayload;
     } catch (error) {
-      return jsonNoStore({ ok: false, error: "Invalid JSON" }, { status: 400 });
+      return errorResponse("invalid_json", "Invalid JSON", 400);
     }
 
     const intent = payload.intent;
     const signature = payload.signature;
 
     if (!intent) {
-      return jsonNoStore({ ok: false, error: "Missing intent" }, { status: 400 });
+      return errorResponse("missing_intent", "Missing intent", 400);
     }
 
     const buyerRaw = (intent as { buyer?: unknown } | undefined)?.buyer;
@@ -108,16 +112,18 @@ export async function POST(request: Request) {
     try {
       buyerChecksum = getAddress(buyer);
     } catch {
-      return jsonNoStore(
-        { ok: false, error: "Invalid intent.buyer", buyer: buyerRaw ?? null },
-        { status: 400 }
+      return errorResponse(
+        "invalid_buyer",
+        "Invalid intent.buyer",
+        400,
+        { buyer: buyerRaw ?? null }
       );
     }
     const defaultEvent = EVENTS[0];
     const splitSlug = intent.splitSlug ?? defaultEvent?.splitId ?? defaultEvent?.planId ?? defaultEvent?.slug ?? "";
     if (!intent.splitSlug || !intent.merchantOrderId) {
       if (!shouldAllowUnsignedIntent) {
-        return jsonNoStore({ ok: false, error: "Signature required" }, { status: 401 });
+        return errorResponse("missing_signature", "Signature required", 401);
       }
       const paymentIntentId = intent.merchantOrderId?.trim() || crypto.randomUUID();
       const orderId = computeOrderId({
@@ -172,13 +178,13 @@ export async function POST(request: Request) {
     try {
       verifyingContract = getTicketContractAddress({ server: true });
     } catch {
-      return jsonNoStore({ ok: false, error: "Invalid verifyingContract" }, { status: 400 });
+      return errorResponse("invalid_contract", "Invalid verifyingContract", 400);
     }
 
     const deadline = normalizeBigInt(intent.deadline);
     const now = BigInt(Math.floor(Date.now() / 1000));
     if (deadline < now) {
-      return jsonNoStore({ ok: false, error: "Intent expired" }, { status: 400 });
+      return errorResponse("intent_expired", "Intent expired", 400);
     }
 
     const domain = {
@@ -192,7 +198,7 @@ export async function POST(request: Request) {
     try {
       buyerChecksumForMessage = getAddress(String(intent.buyer));
     } catch {
-      return jsonNoStore({ ok: false, error: "Invalid buyer before verifyTypedData" }, { status: 400 });
+      return errorResponse("invalid_buyer", "Invalid buyer before verifyTypedData", 400);
     }
 
     const message = {
@@ -217,33 +223,41 @@ export async function POST(request: Request) {
     };
 
     if (!debug.domainVerifyingContract || String(debug.domainVerifyingContract) === "undefined") {
-      return jsonNoStore(
-        { ok: false, error: "domain.verifyingContract is undefined", ...(debugEnabled ? { debug } : {}) },
-        { status: 400 }
+      return errorResponse(
+        "invalid_contract",
+        "domain.verifyingContract is undefined",
+        400,
+        debugEnabled ? { debug } : undefined
       );
     }
 
     if (!debug.messageBuyer || String(debug.messageBuyer) === "undefined") {
-      return jsonNoStore(
-        { ok: false, error: "message.buyer is undefined", ...(debugEnabled ? { debug } : {}) },
-        { status: 400 }
+      return errorResponse(
+        "invalid_buyer",
+        "message.buyer is undefined",
+        400,
+        debugEnabled ? { debug } : undefined
       );
     }
 
     try {
       getAddress(String(debug.domainVerifyingContract));
     } catch {
-      return jsonNoStore(
-        { ok: false, error: "domain.verifyingContract invalid", ...(debugEnabled ? { debug } : {}) },
-        { status: 400 }
+      return errorResponse(
+        "invalid_contract",
+        "domain.verifyingContract invalid",
+        400,
+        debugEnabled ? { debug } : undefined
       );
     }
     try {
       getAddress(String(debug.messageBuyer));
     } catch {
-      return jsonNoStore(
-        { ok: false, error: "message.buyer invalid", ...(debugEnabled ? { debug } : {}) },
-        { status: 400 }
+      return errorResponse(
+        "invalid_buyer",
+        "message.buyer invalid",
+        400,
+        debugEnabled ? { debug } : undefined
       );
     }
 
@@ -275,7 +289,7 @@ export async function POST(request: Request) {
 
     if (!signature || !signature.trim()) {
       if (!shouldAllowUnsignedIntent) {
-        return jsonNoStore({ ok: false, error: "Signature required" }, { status: 401 });
+        return errorResponse("missing_signature", "Signature required", 401);
       }
       const existing = await getOrderByMerchantId(paymentIntentId);
       if (!existing) {
@@ -300,7 +314,7 @@ export async function POST(request: Request) {
     const normalizedSig = signature.trim();
     const isHexSig = /^0x[0-9a-fA-F]{130}$/.test(normalizedSig);
     if (!isHexSig) {
-      return jsonNoStore({ ok: false, error: "Invalid signature" }, { status: 401 });
+      return errorResponse("invalid_signature", "Invalid signature", 401);
     }
 
     const verified = await verifyTypedData({
@@ -313,7 +327,7 @@ export async function POST(request: Request) {
     });
 
     if (!verified) {
-      return jsonNoStore({ ok: false, error: "Invalid signature" }, { status: 401 });
+      return errorResponse("invalid_signature", "Invalid signature", 401);
     }
 
     const existing = await getOrderByMerchantId(paymentIntentId);
@@ -351,6 +365,6 @@ export async function POST(request: Request) {
     if (lockKey) {
       await kv.del(lockKey).catch(() => {});
     }
-    return jsonNoStore({ ok: false, error: message }, { status: 500 });
+    return errorResponse("server_error", message, 500);
   }
 }

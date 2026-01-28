@@ -15,6 +15,7 @@ import { getChainConfig } from "@/src/lib/chain";
 import { logger } from "@/src/lib/logger";
 
 const verifyLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
+const verifyTokenLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
 const env = getServerEnv();
 const chain = getChainConfig();
 const RPC_URL = chain.rpcUrl;
@@ -230,6 +231,26 @@ export async function POST(request: Request) {
     }
 
     const tokenIdString = tokenId.toString();
+    const tokenRate = verifyTokenLimiter(`${route}:${ip}:${tokenIdString}`);
+    if (!tokenRate.ok) {
+      const retryAfter = Math.ceil(tokenRate.retryAfterMs / 1000);
+      logGateFailure("rate_limited", tokenIdString, null, ipHash);
+      emitMetric(
+        "rate_limit_hit",
+        { route, ip, reason: "rate_limit", latencyMs: Date.now() - startedAt }
+      );
+      return jsonNoStore(
+        {
+          ok: false,
+          valid: false,
+          reason: "rate_limited",
+          chainId: CHAIN_ID,
+          tokenId: tokenIdString,
+          eventId: null,
+        },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
+    }
     const code = normalizeCode(payload?.code);
     if (!code) {
       logGateFailure("missing_code", tokenIdString, null, ipHash);

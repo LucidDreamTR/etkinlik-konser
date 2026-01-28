@@ -35,6 +35,10 @@ TicketSale zincirde event konfigürasyonu tutmaz. Event durumu ve fiyat doğrula
 - `docs/security.md`
 - `docs/rollback-plan.md`
 
+## Supported networks
+- Default: Sepolia or Holesky (testnets).
+- Mainnet requires `MAINNET_ENABLED=true` and `NEXT_PUBLIC_CHAIN_ID=1`.
+
 ## Local seeding
 
 Deploy local contracts and print addresses:

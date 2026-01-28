@@ -51,6 +51,7 @@ const debugEnabled = isProdDebugEnabled();
 const PURCHASE_LOCK_TTL_SECONDS = 120;
 const hasKv = Boolean(env.KV_REST_API_URL && env.KV_REST_API_TOKEN);
 const purchaseLimiter = createRateLimiter({ max: 10, windowMs: 60_000 });
+const purchaseOrderLimiter = createRateLimiter({ max: 10, windowMs: 60_000 });
 
 function getClientIp(headers: Headers): string {
   const forwarded = headers.get("x-forwarded-for");
@@ -87,6 +88,10 @@ function resolveTicketSelection(eventIdNumber: number, ticketTypeRaw: string | n
   };
 }
 
+function errorResponse(reason: string, error: string, status: number, extra?: Record<string, unknown>) {
+  return jsonNoStore({ ok: false, reason, error, ...(extra ?? {}) }, { status });
+}
+
 async function resolveNextTokenId(): Promise<bigint> {
   const contractAddress = getTicketContractAddress({ server: true });
   const client = createPublicClient({ transport: http(RPC_URL) });
@@ -105,10 +110,7 @@ export async function POST(request: Request) {
   let lockKey: string | null = null;
   try {
     if (env.VERCEL_ENV === "production" && !env.FEATURE_TICKETING_ENABLED) {
-      return jsonNoStore(
-        { ok: false, error: "Ticketing temporarily disabled" },
-        { status: 503 }
-      );
+      return errorResponse("disabled", "Ticketing temporarily disabled", 503);
     }
 
     const rate = purchaseLimiter(`${route}:${clientIp}`);
@@ -119,31 +121,29 @@ export async function POST(request: Request) {
         { route, ip: clientIp, reason: "rate_limit", latencyMs: Date.now() - startedAt }
       );
       return jsonNoStore(
-        { ok: false, error: "Rate limit exceeded" },
+        { ok: false, reason: "rate_limited", error: "Rate limit exceeded" },
         { status: 429, headers: { "Retry-After": String(retryAfter) } }
       );
     }
 
     if (!env.BACKEND_WALLET_PRIVATE_KEY) {
-      return jsonNoStore(
-        {
-          ok: false,
-          error: "Missing env: BACKEND_WALLET_PRIVATE_KEY (server-only, required for minting)",
-        },
-        { status: 500 }
+      return errorResponse(
+        "server_misconfigured",
+        "Missing env: BACKEND_WALLET_PRIVATE_KEY (server-only, required for minting)",
+        500
       );
     }
 
     const raw = await request.text();
     if (!raw) {
-      return jsonNoStore({ ok: false, error: "Empty body" }, { status: 400 });
+      return errorResponse("empty_body", "Empty body", 400);
     }
 
     let payload: PurchasePayload;
     try {
       payload = JSON.parse(raw) as PurchasePayload;
     } catch (error) {
-      return jsonNoStore({ ok: false, error: "Invalid JSON" }, { status: 400 });
+      return errorResponse("invalid_json", "Invalid JSON", 400);
     }
 
     const intent = payload.intent;
@@ -151,34 +151,31 @@ export async function POST(request: Request) {
 
     if (!intent) {
       if (payload.intentId || payload.merchantOrderId) {
-        return jsonNoStore(
-          { ok: false, error: "Purchase requires intent payload and signature" },
-          { status: 400 }
-        );
+        return errorResponse("missing_intent", "Purchase requires intent payload and signature", 400);
       }
-      return jsonNoStore({ ok: false, error: "Missing intent" }, { status: 400 });
+      return errorResponse("missing_intent", "Missing intent", 400);
     }
 
     if (!signature || !signature.trim()) {
-      return jsonNoStore({ ok: false, error: "Missing signature" }, { status: 400 });
+      return errorResponse("missing_signature", "Missing signature", 400);
     }
     const normalizedSig = signature.trim();
     if (!/^0x[0-9a-fA-F]{130}$/.test(normalizedSig)) {
-      return jsonNoStore({ ok: false, error: "Invalid signature" }, { status: 401 });
+      return errorResponse("invalid_signature", "Invalid signature", 401);
     }
 
     let buyerChecksumForMessage: `0x${string}`;
     try {
       buyerChecksumForMessage = getAddress(String(intent.buyer));
     } catch {
-      return jsonNoStore({ ok: false, error: "Invalid buyer before verifyTypedData" }, { status: 400 });
+      return errorResponse("invalid_buyer", "Invalid buyer before verifyTypedData", 400);
     }
 
     let verifyingContract: `0x${string}`;
     try {
       verifyingContract = getTicketContractAddress({ server: true });
     } catch {
-      return jsonNoStore({ ok: false, error: "Invalid verifyingContract" }, { status: 400 });
+      return errorResponse("invalid_contract", "Invalid verifyingContract", 400);
     }
 
     const domain = {
@@ -221,21 +218,31 @@ export async function POST(request: Request) {
           recoveredSigner = null;
         }
       }
-      return jsonNoStore(
-        {
-          ok: false,
-          error: "Invalid signature",
-          ...(debugEnabled ? { recoveredSigner, expectedBuyer: message.buyer } : {}),
-        },
-        { status: 401 }
+      return errorResponse(
+        "invalid_signature",
+        "Invalid signature",
+        401,
+        debugEnabled ? { recoveredSigner, expectedBuyer: message.buyer } : undefined
       );
     }
 
     const paymentIntentId = intent.merchantOrderId;
+    const orderRate = purchaseOrderLimiter(`${route}:${clientIp}:${paymentIntentId}`);
+    if (!orderRate.ok) {
+      const retryAfter = Math.ceil(orderRate.retryAfterMs / 1000);
+      emitMetric(
+        "rate_limit_hit",
+        { route, ip: clientIp, reason: "rate_limit", latencyMs: Date.now() - startedAt }
+      );
+      return jsonNoStore(
+        { ok: false, reason: "rate_limited", error: "Rate limit exceeded" },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
+    }
     const eventIdNormalized = normalizeBigInt(intent.eventId);
     const eventIdNumber = Number(eventIdNormalized);
     if (!Number.isFinite(eventIdNumber)) {
-      return jsonNoStore({ ok: false, error: "Invalid eventId" }, { status: 400 });
+      return errorResponse("invalid_event_id", "Invalid eventId", 400);
     }
     const ticketTypeRaw = normalizeString(intent.ticketType);
     const seatRaw = normalizeString(intent.seat);
@@ -308,7 +315,7 @@ export async function POST(request: Request) {
     try {
       nextTokenId = await resolveNextTokenId();
     } catch {
-      return jsonNoStore({ ok: false, error: "Failed to read nextTokenId()" }, { status: 500 });
+      return errorResponse("onchain_error", "Failed to read nextTokenId()", 500);
     }
     const tokenUri = `${appUrl}/api/metadata/ticket/${eventIdNormalized.toString()}?tokenId=${nextTokenId.toString()}`;
 
@@ -328,18 +335,30 @@ export async function POST(request: Request) {
       if (lockKey) {
         await kv.del(lockKey).catch(() => {});
       }
-      return jsonNoStore(
-        {
-          ok: false,
-          error: err.message || "Onchain error",
-          ...(debugEnabled
-            ? {
-                txStage: err.stage ?? null,
-                rpcErrorCode: err.rpcErrorCode ?? null,
-              }
-            : {}),
-        },
-        { status: 500 }
+      const message = err.message || "Onchain error";
+      if (/payment id has already been used/i.test(message)) {
+        emitMetric(
+          "purchase_duplicate",
+          { route, merchantOrderId: paymentIntentId, ip: clientIp, latencyMs: Date.now() - startedAt }
+        );
+        return jsonNoStore({
+          ok: true,
+          status: "duplicate",
+          paymentIntentId,
+          orderId,
+          ...(debugEnabled ? { onchainError: "duplicate" } : {}),
+        });
+      }
+      return errorResponse(
+        "onchain_error",
+        message,
+        500,
+        debugEnabled
+          ? {
+              txStage: err.stage ?? null,
+              rpcErrorCode: err.rpcErrorCode ?? null,
+            }
+          : undefined
       );
     }
 
@@ -412,6 +431,6 @@ export async function POST(request: Request) {
       await kv.del(lockKey).catch(() => {});
     }
     const message = error instanceof Error ? error.message : String(error);
-    return jsonNoStore({ ok: false, error: message }, { status: 500 });
+    return errorResponse("server_error", message, 500);
   }
 }

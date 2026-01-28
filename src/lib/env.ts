@@ -29,6 +29,8 @@ const serverEnvSchema = z.object({
   ENABLE_PROD_DEBUG: boolFromEnv(false),
   ALLOW_UNSIGNED_INTENT: boolFromEnv(false),
   FEATURE_TICKETING_ENABLED: boolFromEnv(true),
+  MAINNET_ENABLED: boolFromEnv(false),
+  METRICS_ENABLED: boolFromEnv(true),
   GATE_OPERATOR_KEY: z.string().optional(),
   RPC_URL: z.string().optional(),
   VERCEL_ENV: z.string().optional(),
@@ -54,6 +56,25 @@ export function getServerEnv(): ServerEnv {
   }
 
   cachedEnv = parsed.data;
+
+  if (cachedEnv.VERCEL_ENV === "production") {
+    if (cachedEnv.ENABLE_PROD_DEBUG) {
+      throw new Error("ENABLE_PROD_DEBUG must be false in production.");
+    }
+    if (cachedEnv.ALLOW_UNSIGNED_INTENT) {
+      throw new Error("ALLOW_UNSIGNED_INTENT must be false in production.");
+    }
+    if (!cachedEnv.METRICS_ENABLED) {
+      throw new Error("METRICS_ENABLED must be true in production.");
+    }
+  }
+
+  if (cachedEnv.MAINNET_ENABLED) {
+    const chainId = cachedEnv.NEXT_PUBLIC_CHAIN_ID ? Number(cachedEnv.NEXT_PUBLIC_CHAIN_ID) : 1;
+    if (chainId !== 1) {
+      throw new Error("MAINNET_ENABLED=true requires NEXT_PUBLIC_CHAIN_ID=1.");
+    }
+  }
 
   if (!releaseLogged) {
     releaseLogged = true;

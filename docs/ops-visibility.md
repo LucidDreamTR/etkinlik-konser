@@ -25,6 +25,7 @@ Events:
 ## Where to Watch
 - Vercel Logs: filter by `event` value (JSON) per route.
 - Optional: export logs to external tools (generic log pipeline).
+- Readiness checks: `/api/health` (app up) and `/api/ready` (KV + RPC).
 
 ## Starter Alert Thresholds (per 5-minute window)
 - `rate_limit_hit` > 20 on any route → investigate abuse or misbehaving clients.
@@ -42,7 +43,17 @@ Events:
   - Tighten or relax rate limits if legitimate traffic is blocked.
 - Pause ticketing:
   - Set `FEATURE_TICKETING_ENABLED=false` to stop purchase/claim/gate flows.
+- Circuit breaker (manual):
+  - If `onchain_error` spikes, disable ticketing via `FEATURE_TICKETING_ENABLED=false` and re-enable after RPC stabilizes.
 - Post-incident checklist:
   - Confirm rates return to baseline.
   - Document root cause and remediation.
   - Review operator guidance if outcomes were unclear.
+
+## Mainnet Day Checklist
+- MAINNET_ENABLED=true and NEXT_PUBLIC_CHAIN_ID=1.
+- Verify mainnet contract addresses are final and deployed.
+- FEATURE_TICKETING_ENABLED=true.
+- METRICS_ENABLED=true and logging filters in place.
+- Run `/api/health` (must be 200) and `/api/ready` (must be 200).
+- Confirm rate-limit and lock metrics are stable pre-open.

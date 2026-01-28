@@ -7,6 +7,7 @@ import { getServerEnv } from "./env";
 const CHAIN_META: Record<number, { name: string; explorerBase: string }> = {
   1: { name: "mainnet", explorerBase: "https://etherscan.io" },
   11155111: { name: "sepolia", explorerBase: "https://sepolia.etherscan.io" },
+  17000: { name: "holesky", explorerBase: "https://holesky.etherscan.io" },
   31337: { name: "anvil", explorerBase: "" },
 };
 
@@ -35,8 +36,17 @@ export function getChainConfig(): ChainConfig {
   }
 
   const meta = CHAIN_META[chainId] ?? { name: "unknown", explorerBase: "" };
-  if (env.VERCEL_ENV === "production" && meta.name === "unknown") {
-    throw new Error(`Unsupported chainId in production: ${chainId}`);
+  if (env.MAINNET_ENABLED) {
+    if (chainId !== 1) {
+      throw new Error("MAINNET_ENABLED=true requires chainId=1.");
+    }
+  } else {
+    if (chainId === 1) {
+      throw new Error("Mainnet is disabled. Set MAINNET_ENABLED=true to allow chainId=1.");
+    }
+    if (env.VERCEL_ENV === "production" && meta.name === "unknown") {
+      throw new Error(`Unsupported chainId in production: ${chainId}`);
+    }
   }
 
   return {

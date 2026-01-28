@@ -19,6 +19,7 @@ const chain = getChainConfig();
 const RPC_URL = chain.rpcUrl;
 const CHAIN_ID = chain.chainId;
 const claimLimiter = createRateLimiter({ max: 10, windowMs: 60_000 });
+const claimTokenLimiter = createRateLimiter({ max: 10, windowMs: 60_000 });
 const debugEnabled = isProdDebugEnabled();
 const CLAIM_LOCK_TTL_SECONDS = 120;
 const hasKv = Boolean(env.KV_REST_API_URL && env.KV_REST_API_TOKEN);
@@ -189,6 +190,21 @@ export async function POST(request: Request) {
   if (!order.tokenId || !order.nftAddress) {
     logClaimFail("not_ready", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     return jsonNoStore({ ok: false, reason: "not_ready", error: "Order not ready for claim" }, { status: 400 });
+  }
+
+  const claimRateKey = `${route}:${ip}:${order.tokenId ?? order.merchantOrderId}`;
+  const claimRate = claimTokenLimiter(claimRateKey);
+  if (!claimRate.ok) {
+    const retryAfter = Math.ceil(claimRate.retryAfterMs / 1000);
+    logClaimFail("rate_limited", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    emitMetric(
+      "rate_limit_hit",
+      { route, ip, reason: "rate_limit", latencyMs: Date.now() - startedAt }
+    );
+    return jsonNoStore(
+      { ok: false, reason: "rate_limited", error: "Rate limit exceeded" },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } }
+    );
   }
 
   const computed = hashClaimCode(payload.claimCode);
