@@ -85,6 +85,7 @@ function logClaimSuccess(context: { tokenId: string | null; eventId: string | nu
 }
 
 export async function POST(request: Request) {
+  const route = "/api/tickets/claim";
   const startedAt = Date.now();
   let lockKey: string | null = null;
   const ip = getClientIp(request.headers);
@@ -94,14 +95,13 @@ export async function POST(request: Request) {
     return jsonNoStore({ ok: false, error: "Ticketing temporarily disabled" }, { status: 503 });
   }
 
-  const rate = claimLimiter(ip);
+  const rate = claimLimiter(`${route}:${ip}`);
   if (!rate.ok) {
     const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
     logClaimFail("rate_limited", { tokenId: null, eventId: null, ipHash });
     emitMetric(
       "rate_limit_hit",
-      { route: "/api/tickets/claim", ip, reason: "rate_limited" },
-      Date.now() - startedAt
+      { route, ip, reason: "rate_limit", latencyMs: Date.now() - startedAt }
     );
     return jsonNoStore(
       { ok: false, reason: "rate_limited", error: "Rate limit exceeded" },
@@ -150,16 +150,26 @@ export async function POST(request: Request) {
       logClaimFail("not_owner", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
       emitMetric(
         "claim_already",
-        { route: "/api/tickets/claim", merchantOrderId: order.merchantOrderId, ip, reason: "not_owner" },
-        Date.now() - startedAt
+        {
+          route,
+          merchantOrderId: order.merchantOrderId,
+          ip,
+          reason: "not_owner",
+          latencyMs: Date.now() - startedAt,
+        }
       );
       return jsonNoStore({ ok: false, reason: "not_owner", error: "Not owner" }, { status: 403 });
     }
     logClaimFail("already_claimed", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     emitMetric(
       "claim_already",
-      { route: "/api/tickets/claim", merchantOrderId: order.merchantOrderId, ip, reason: "already_claimed" },
-      Date.now() - startedAt
+      {
+        route,
+        merchantOrderId: order.merchantOrderId,
+        ip,
+        reason: "already_claimed",
+        latencyMs: Date.now() - startedAt,
+      }
     );
     return jsonNoStore({ ok: false, reason: "already_claimed", error: "Already claimed" }, { status: 400 });
   }
@@ -188,8 +198,13 @@ export async function POST(request: Request) {
     logClaimFail("invalid_code", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     emitMetric(
       "claim_already",
-      { route: "/api/tickets/claim", merchantOrderId: order.merchantOrderId, ip, reason: "invalid_code" },
-      Date.now() - startedAt
+      {
+        route,
+        merchantOrderId: order.merchantOrderId,
+        ip,
+        reason: "invalid_code",
+        latencyMs: Date.now() - startedAt,
+      }
     );
     return jsonNoStore({ ok: false, reason: "invalid_code", error: "Invalid claimCode" }, { status: 401 });
   }
@@ -217,8 +232,13 @@ export async function POST(request: Request) {
     if (!acquired) {
       emitMetric(
         "lock_hit",
-        { route: "/api/tickets/claim", merchantOrderId: order.merchantOrderId, ip, reason: "claim_lock" },
-        Date.now() - startedAt
+        {
+          route,
+          merchantOrderId: order.merchantOrderId,
+          ip,
+          reason: "lock",
+          latencyMs: Date.now() - startedAt,
+        }
       );
       return jsonNoStore({ ok: true, status: "pending", message: "Claim already processing" }, { status: 202 });
     }
@@ -299,8 +319,7 @@ export async function POST(request: Request) {
     logClaimSuccess({ tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     emitMetric(
       "claim_ok",
-      { route: "/api/tickets/claim", merchantOrderId: order.merchantOrderId, ip },
-      Date.now() - startedAt
+      { route, merchantOrderId: order.merchantOrderId, ip, latencyMs: Date.now() - startedAt }
     );
     if (lockKey) {
       await kv.del(lockKey).catch(() => {});

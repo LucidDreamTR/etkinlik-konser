@@ -142,6 +142,7 @@ function isBytes32Hex(value: string): boolean {
 }
 
 export async function POST(request: Request) {
+  const route = "/api/gate/verify";
   const startedAt = Date.now();
   let gateLockKey: string | null = null;
   const ip = getClientIp(request.headers);
@@ -158,21 +159,19 @@ export async function POST(request: Request) {
       if (!operatorKey || headerKey !== operatorKey) {
         emitMetric(
           "gate_invalid",
-          { route: "/api/gate/verify", ip, reason: "unauthorized" },
-          Date.now() - startedAt
+          { route, ip, reason: "unauthorized", latencyMs: Date.now() - startedAt }
         );
         return jsonNoStore({ ok: false, valid: false, reason: "unauthorized", chainId: CHAIN_ID }, { status: 401 });
       }
     }
 
-    const rate = verifyLimiter(ip);
+    const rate = verifyLimiter(`${route}:${ip}`);
     if (!rate.ok) {
       const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
       logGateFailure("rate_limited", "unknown", null, ipHash);
       emitMetric(
         "rate_limit_hit",
-        { route: "/api/gate/verify", ip, reason: "rate_limited" },
-        Date.now() - startedAt
+        { route, ip, reason: "rate_limit", latencyMs: Date.now() - startedAt }
       );
       return jsonNoStore(
         {
@@ -193,6 +192,13 @@ export async function POST(request: Request) {
       payload = (await request.json()) as VerifyPayload;
     } catch {
       logGateFailure("invalid_json", "unknown", null, ipHash);
+      emitMetric("gate_invalid", {
+        route,
+        tokenId: "unknown",
+        ip,
+        reason: "invalid_json",
+        latencyMs: Date.now() - startedAt,
+      });
       return respondFailure({
         ok: false,
         reason: "invalid_json",
@@ -206,6 +212,13 @@ export async function POST(request: Request) {
     const tokenId = parseTokenId(payload?.tokenId);
     if (tokenId === null) {
       logGateFailure("invalid_token", "unknown", null, ipHash);
+      emitMetric("gate_invalid", {
+        route,
+        tokenId: "unknown",
+        ip,
+        reason: "invalid_token",
+        latencyMs: Date.now() - startedAt,
+      });
       return respondFailure({
         ok: false,
         reason: "invalid_token",
@@ -220,6 +233,13 @@ export async function POST(request: Request) {
     const code = normalizeCode(payload?.code);
     if (!code) {
       logGateFailure("missing_code", tokenIdString, null, ipHash);
+      emitMetric("gate_invalid", {
+        route,
+        tokenId: tokenIdString,
+        ip,
+        reason: "missing_code",
+        latencyMs: Date.now() - startedAt,
+      });
       return respondFailure({
         ok: false,
         reason: "missing_code",
@@ -237,8 +257,7 @@ export async function POST(request: Request) {
         logGateFailure("temporarily_locked", tokenIdString, null, ipHash);
         emitMetric(
           "lock_hit",
-          { route: "/api/gate/verify", tokenId: tokenIdString, ip, reason: "temporarily_locked" },
-          Date.now() - startedAt
+          { route, tokenId: tokenIdString, ip, reason: "lock", latencyMs: Date.now() - startedAt }
         );
         return respondFailure({
           ok: true,
@@ -256,8 +275,7 @@ export async function POST(request: Request) {
         logGateFailure("temporarily_locked", tokenIdString, null, ipHash);
         emitMetric(
           "lock_hit",
-          { route: "/api/gate/verify", tokenId: tokenIdString, ip, reason: "gate_lock" },
-          Date.now() - startedAt
+          { route, tokenId: tokenIdString, ip, reason: "lock", latencyMs: Date.now() - startedAt }
         );
         return respondFailure({
           ok: true,
@@ -274,6 +292,13 @@ export async function POST(request: Request) {
     const contractAddress = isAddress(contractAddressRaw) ? (getAddress(contractAddressRaw) as `0x${string}`) : null;
     if (!contractAddress) {
       logGateFailure("onchain_error", tokenIdString, null, ipHash);
+      emitMetric("gate_invalid", {
+        route,
+        tokenId: tokenIdString,
+        ip,
+        reason: "onchain_error",
+        latencyMs: Date.now() - startedAt,
+      });
       return respondFailure({
         ok: true,
         reason: "onchain_error",
@@ -320,6 +345,13 @@ export async function POST(request: Request) {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       logGateFailure("onchain_error", tokenIdString, null, ipHash);
+      emitMetric("gate_invalid", {
+        route,
+        tokenId: tokenIdString,
+        ip,
+        reason: "onchain_error",
+        latencyMs: Date.now() - startedAt,
+      });
       return respondFailure({
         ok: true,
         reason: "onchain_error",
@@ -332,6 +364,13 @@ export async function POST(request: Request) {
 
     if (!claimed) {
       logGateFailure("not_claimed", tokenIdString, eventId, ipHash);
+      emitMetric("gate_invalid", {
+        route,
+        tokenId: tokenIdString,
+        ip,
+        reason: "not_claimed",
+        latencyMs: Date.now() - startedAt,
+      });
       return respondFailure({
         ok: true,
         reason: "not_claimed",
@@ -347,6 +386,13 @@ export async function POST(request: Request) {
 
     if (!paymentIdOnchain || paymentIdOnchain === ZERO_BYTES32) {
       logGateFailure("payment_missing", tokenIdString, eventId, ipHash);
+      emitMetric("gate_invalid", {
+        route,
+        tokenId: tokenIdString,
+        ip,
+        reason: "payment_missing",
+        latencyMs: Date.now() - startedAt,
+      });
       return respondFailure({
         ok: true,
         reason: "payment_missing",
@@ -381,8 +427,7 @@ export async function POST(request: Request) {
       }
       emitMetric(
         "gate_invalid",
-        { route: "/api/gate/verify", tokenId: tokenIdString, ip, reason: "payment_mismatch" },
-        Date.now() - startedAt
+        { route, tokenId: tokenIdString, ip, reason: "payment_mismatch", latencyMs: Date.now() - startedAt }
       );
       return respondFailure({
         ok: true,
@@ -422,6 +467,13 @@ export async function POST(request: Request) {
             }
           } else {
             logGateFailure("not_owner", tokenIdString, eventId, ipHash);
+            emitMetric("gate_invalid", {
+              route,
+              tokenId: tokenIdString,
+              ip,
+              reason: "not_owner",
+              latencyMs: Date.now() - startedAt,
+            });
             return respondFailure({
               ok: true,
               reason: "not_owner",
@@ -451,8 +503,7 @@ export async function POST(request: Request) {
       logGateFailure("already_used", tokenIdString, eventId, ipHash);
       emitMetric(
         "gate_invalid",
-        { route: "/api/gate/verify", tokenId: tokenIdString, ip, reason: "already_used" },
-        Date.now() - startedAt
+        { route, tokenId: tokenIdString, ip, reason: "already_used", latencyMs: Date.now() - startedAt }
       );
       return respondFailure({
         ok: true,
@@ -473,8 +524,7 @@ export async function POST(request: Request) {
 
     emitMetric(
       "gate_valid",
-      { route: "/api/gate/verify", tokenId: tokenIdString, ip },
-      Date.now() - startedAt
+      { route, tokenId: tokenIdString, ip, latencyMs: Date.now() - startedAt }
     );
     return jsonNoStore({
       ok: true,

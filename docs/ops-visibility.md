@@ -1,33 +1,48 @@
 # Ops Visibility & Alerts
 
-## Metric Events (Log-Based)
-- `rate_limit_hit`
-- `lock_hit`
+## What We Emit (Log-Based Metrics)
+Each metric is a single JSON log line with:
+- `event` (string)
+- `route` (string)
+- `reason` (optional)
+- `merchantOrderId_hash` (optional, sha256)
+- `tokenId` (optional)
+- `ip_hash` (optional, sha256)
+- `latency_ms` (optional)
+- `ts` (ISO8601)
+
+Events:
 - `purchase_processed`
 - `purchase_pending`
 - `purchase_duplicate`
+- `rate_limit_hit`
+- `lock_hit`
 - `claim_ok`
 - `claim_already`
 - `gate_valid`
 - `gate_invalid`
 
-All metrics include tags: `route`, hashed `merchantOrderId`, `tokenId`, hashed `ip`, `reason`, and `latency_ms`.
+## Where to Watch
+- Vercel Logs: filter by `event` value (JSON) per route.
+- Optional: export logs to external tools (generic log pipeline).
 
-## What to Monitor
-- Spikes in `rate_limit_hit` or `lock_hit`.
-- Increases in `gate_invalid` with `payment_mismatch`.
-- RPC errors in logs (`onchain_error`, `rpcErrorCode`).
-- Increased `claim_already` or `invalid_code` patterns.
+## Starter Alert Thresholds (per 5-minute window)
+- `rate_limit_hit` > 20 on any route → investigate abuse or misbehaving clients.
+- `lock_hit` spike (>10 for the same token/order) → investigate retries/UI loop.
+- `gate_invalid` ratio > 5% of gate scans → possible QR issues or tampering.
+- `purchase_duplicate` spike → client retry bug or idempotency failure.
 
-## Suggested Thresholds (Starter)
-- `rate_limit_hit` > 50/min per route.
-- `lock_hit` > 20/min on purchase or gate.
-- `gate_invalid` > 10% of total gate scans in a 5-minute window.
-
-## Where to Monitor
-- Vercel Logs for JSON metrics lines.
-- Optional external log ingestion (Sentry/Logtail/Datadog/etc.).
-
-## Response Actions
-- Verify RPC health and KV availability.
-- Temporarily disable ticketing with `FEATURE_TICKETING_ENABLED=false` if abuse detected.
+## Ops Playbook (Short)
+- Triage spikes:
+  - Verify `route`, `reason`, and `ip_hash` patterns.
+  - Check RPC and KV health; confirm `/api/health` is 200.
+  - Inspect recent deploys and configuration changes.
+- Adjust temporarily:
+  - Increase lock TTLs if duplicate processing occurs.
+  - Tighten or relax rate limits if legitimate traffic is blocked.
+- Pause ticketing:
+  - Set `FEATURE_TICKETING_ENABLED=false` to stop purchase/claim/gate flows.
+- Post-incident checklist:
+  - Confirm rates return to baseline.
+  - Document root cause and remediation.
+  - Review operator guidance if outcomes were unclear.

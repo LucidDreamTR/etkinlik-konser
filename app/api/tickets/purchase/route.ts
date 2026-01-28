@@ -99,6 +99,7 @@ async function resolveNextTokenId(): Promise<bigint> {
 }
 
 export async function POST(request: Request) {
+  const route = "/api/tickets/purchase";
   const clientIp = getClientIp(request.headers);
   const startedAt = Date.now();
   let lockKey: string | null = null;
@@ -110,13 +111,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const rate = purchaseLimiter(clientIp);
+    const rate = purchaseLimiter(`${route}:${clientIp}`);
     if (!rate.ok) {
       const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
       emitMetric(
         "rate_limit_hit",
-        { route: "/api/tickets/purchase", ip: clientIp, reason: "rate_limited" },
-        Date.now() - startedAt
+        { route, ip: clientIp, reason: "rate_limit", latencyMs: Date.now() - startedAt }
       );
       return jsonNoStore(
         { ok: false, error: "Rate limit exceeded" },
@@ -259,8 +259,7 @@ export async function POST(request: Request) {
       }
       emitMetric(
         "purchase_duplicate",
-        { route: "/api/tickets/purchase", merchantOrderId: paymentIntentId, ip: clientIp },
-        Date.now() - startedAt
+        { route, merchantOrderId: paymentIntentId, ip: clientIp, latencyMs: Date.now() - startedAt }
       );
       return jsonNoStore({
         ok: true,
@@ -282,13 +281,17 @@ export async function POST(request: Request) {
         }
         emitMetric(
           "lock_hit",
-          { route: "/api/tickets/purchase", merchantOrderId: paymentIntentId, ip: clientIp },
-          Date.now() - startedAt
+          {
+            route,
+            merchantOrderId: paymentIntentId,
+            ip: clientIp,
+            reason: "lock",
+            latencyMs: Date.now() - startedAt,
+          }
         );
         emitMetric(
           "purchase_pending",
-          { route: "/api/tickets/purchase", merchantOrderId: paymentIntentId, ip: clientIp },
-          Date.now() - startedAt
+          { route, merchantOrderId: paymentIntentId, ip: clientIp, latencyMs: Date.now() - startedAt }
         );
         return jsonNoStore({
           ok: true,
@@ -346,8 +349,7 @@ export async function POST(request: Request) {
       }
       emitMetric(
         "purchase_duplicate",
-        { route: "/api/tickets/purchase", merchantOrderId: paymentIntentId, ip: clientIp },
-        Date.now() - startedAt
+        { route, merchantOrderId: paymentIntentId, ip: clientIp, latencyMs: Date.now() - startedAt }
       );
       return jsonNoStore({
         ok: true,
@@ -395,8 +397,7 @@ export async function POST(request: Request) {
     }
     emitMetric(
       "purchase_processed",
-      { route: "/api/tickets/purchase", merchantOrderId: paymentIntentId, ip: clientIp },
-      Date.now() - startedAt
+      { route, merchantOrderId: paymentIntentId, ip: clientIp, latencyMs: Date.now() - startedAt }
     );
     return jsonNoStore({
       ok: true,

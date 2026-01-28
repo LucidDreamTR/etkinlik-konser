@@ -64,17 +64,17 @@ function normalizeBigInt(value: TicketIntent["eventId"]): bigint {
 }
 
 export async function POST(request: Request) {
+  const route = "/api/tickets/intent";
   const clientIp = getClientIp(request.headers);
   const startedAt = Date.now();
   let lockKey: string | null = null;
   try {
-    const rate = intentLimiter(clientIp);
+    const rate = intentLimiter(`${route}:${clientIp}`);
     if (!rate.ok) {
       const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
       emitMetric(
         "rate_limit_hit",
-        { route: "/api/tickets/intent", ip: clientIp, reason: "rate_limited" },
-        Date.now() - startedAt
+        { route, ip: clientIp, reason: "rate_limit", latencyMs: Date.now() - startedAt }
       );
       return jsonNoStore(
         { ok: false, error: "Rate limit exceeded" },
@@ -133,8 +133,13 @@ export async function POST(request: Request) {
         if (!acquired) {
           emitMetric(
             "lock_hit",
-            { route: "/api/tickets/intent", merchantOrderId: paymentIntentId, ip: clientIp },
-            Date.now() - startedAt
+            {
+              route,
+              merchantOrderId: paymentIntentId,
+              ip: clientIp,
+              reason: "lock",
+              latencyMs: Date.now() - startedAt,
+            }
           );
           return jsonNoStore(
             { ok: true, status: "pending", paymentIntentId, orderId },
@@ -256,8 +261,13 @@ export async function POST(request: Request) {
       if (!acquired) {
         emitMetric(
           "lock_hit",
-          { route: "/api/tickets/intent", merchantOrderId: paymentIntentId, ip: clientIp },
-          Date.now() - startedAt
+          {
+            route,
+            merchantOrderId: paymentIntentId,
+            ip: clientIp,
+            reason: "lock",
+            latencyMs: Date.now() - startedAt,
+          }
         );
         return jsonNoStore({ ok: true, status: "pending", paymentIntentId, orderId }, { status: 202 });
       }

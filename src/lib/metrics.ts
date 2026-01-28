@@ -14,11 +14,12 @@ export type MetricEvent =
   | "gate_invalid";
 
 export type MetricTags = {
-  route?: string;
+  route: string;
   merchantOrderId?: string | null;
   tokenId?: string | null;
   ip?: string | null;
   reason?: string | null;
+  latencyMs?: number | null;
 };
 
 function sha256(value: string): string {
@@ -30,17 +31,17 @@ function hashIdentifier(value: string | null | undefined): string | undefined {
   return sha256(value);
 }
 
-export function emitMetric(event: MetricEvent, tags: MetricTags, latencyMs: number) {
+export function emitMetric(event: MetricEvent, tags: MetricTags) {
+  const ts = new Date().toISOString();
   const payload = {
     event,
-    tags: {
-      ...(tags.route ? { route: tags.route } : {}),
-      ...(tags.merchantOrderId ? { merchantOrderId: hashIdentifier(tags.merchantOrderId) } : {}),
-      ...(tags.tokenId ? { tokenId: tags.tokenId } : {}),
-      ...(tags.ip ? { ip: hashIdentifier(tags.ip) } : {}),
-      ...(tags.reason ? { reason: tags.reason } : {}),
-    },
-    latency_ms: latencyMs,
+    route: tags.route,
+    ...(tags.reason ? { reason: tags.reason } : {}),
+    ...(tags.merchantOrderId ? { merchantOrderId_hash: hashIdentifier(tags.merchantOrderId) } : {}),
+    ...(tags.tokenId ? { tokenId: tags.tokenId } : {}),
+    ...(tags.ip ? { ip_hash: hashIdentifier(tags.ip) } : {}),
+    ...(typeof tags.latencyMs === "number" ? { latency_ms: tags.latencyMs } : {}),
+    ts,
   };
 
   logger.info("metric", payload);
