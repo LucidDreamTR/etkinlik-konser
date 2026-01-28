@@ -39,8 +39,8 @@ Rules:
 | reason | meaning | operator action | escalate? |
 | --- | --- | --- | --- |
 | valid | Ticket is valid | Admit entry | No |
-| invalid_code | QR is malformed or unreadable | Ask for another copy; rescan once | Yes if repeats |
-| payment_mismatch | QR hash does not match paymentId on-chain | Deny entry; ask for proof of purchase | Yes |
+| invalid_code | QR is malformed or unreadable | Ask for another copy of the same ticket (original email or wallet view); rescan once. | Yes if repeats |
+| payment_mismatch | QR hash does not match paymentId on-chain | Deny entry; ask for proof of purchase (order confirmation email or wallet transaction). | Yes |
 | not_owner | Ticket owner does not match expected wallet | Deny entry; refer to supervisor | Yes |
 | already_claimed | Ticket already used/claimed | Deny entry; check identity and time | Yes |
 | rate_limited | Too many scans in short time | Wait 30–60s, then scan once | No |
