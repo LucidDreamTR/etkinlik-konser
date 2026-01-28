@@ -22,6 +22,8 @@ export type MetricTags = {
   latencyMs?: number | null;
 };
 
+const METRICS_ENABLED = process.env.METRICS_ENABLED !== "false";
+
 function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -32,14 +34,17 @@ function hashIdentifier(value: string | null | undefined): string | undefined {
 }
 
 export function emitMetric(event: MetricEvent, tags: MetricTags) {
+  if (!METRICS_ENABLED) return;
+  const normalizedRoute = tags.route?.trim() || "unknown";
+  const normalizedIp = tags.ip ? tags.ip.split(",")[0]?.trim() : undefined;
   const ts = new Date().toISOString();
   const payload = {
     event,
-    route: tags.route,
+    route: normalizedRoute,
     ...(tags.reason ? { reason: tags.reason } : {}),
     ...(tags.merchantOrderId ? { merchantOrderId_hash: hashIdentifier(tags.merchantOrderId) } : {}),
     ...(tags.tokenId ? { tokenId: tags.tokenId } : {}),
-    ...(tags.ip ? { ip_hash: hashIdentifier(tags.ip) } : {}),
+    ...(normalizedIp ? { ip_hash: hashIdentifier(normalizedIp) } : {}),
     ...(typeof tags.latencyMs === "number" ? { latency_ms: tags.latencyMs } : {}),
     ts,
   };
