@@ -1,59 +1,101 @@
-# Operator QR/Scan Runbook
+# Operator QR / Scan Runbook
 
-## Before Event Checklist
-- [ ] `GATE_OPERATOR_KEY` set in production.
-- [ ] Confirm `/api/health` returns `ok: true` and expected `chainId`.
-- [ ] Verify RPC connectivity from venue (cellular hotspot backup ready).
-- [ ] Confirm Vercel logs accessible for incident review.
-- [ ] Validate scanner device time is correct.
+## Purpose & Scope
+- For: gate operators and on-site supervisors.
+- Covers: QR scan → verify → admit/deny.
+- Not covered: smart contract changes, refunds, payments, or engineering fixes.
 
-## Scanning Procedure
-Accepted formats:
-- **bytes32 orderId** (hex string, `0x` + 64 hex chars)
-- **merchantOrderId UUID** (will be hashed to compare with on-chain paymentId)
+## Pre-Event Checklist (10–15 items)
+- Operator device charged; spare power bank ready.
+- Camera permissions granted to scanning app.
+- App logged in and showing **Production** environment.
+- Network online and stable; backup hotspot available.
+- Confirm `x-operator-key` is configured in production.
+- Check `/api/health` returns **200** before doors open.
+- Verify correct event and gate are selected in the operator app.
+- Test-scan a known valid ticket before opening.
+- Review the reason/action table with all operators.
+- Remind staff: no manual edits to QR content.
+- Expect brief delays if network is slow.
+- Avoid rapid rescans (rate limiting).
 
-Steps:
-1. Scan QR code.
-2. Operator app sends `{ tokenId, code }` to `/api/gate/verify`.
-3. API checks on-chain paymentId mapping, owner, and claimed status.
+## Scan Formats (Exact)
+Accepted QR payloads:
+- **bytes32**: `0x` + 64 hex chars (used directly).
+- **merchantOrderId (UUID or string)**: hashed with `keccak256(preimage)` before compare.
 
-## Result Meanings
-- `valid`: ticket OK, admit.
-- `invalid`: QR code or payment mismatch.
-- `payment_mismatch`: QR code doesn’t match paymentIdOf(tokenId).
-- `not_owner`: claimed owner does not match on-chain owner.
-- `claimed`: ticket is claimed on-chain.
-- `already_used`: ticket already used; do not admit.
-- `temporarily_locked`: too many attempts; wait or fallback to manual check.
+Rules:
+- Scan exactly what is shown.
+- **Do not** edit or retype the QR content.
+
+## Normal Flow (Step-by-Step)
+1. Scan the QR code once.
+2. System normalizes input (bytes32 or UUID → hash).
+3. On-chain checks run (owner, claimed, paymentId match).
+4. Result appears within seconds.
+5. Admit or deny based on the reason table below.
+
+## Response Reasons & Operator Actions
+| reason | meaning | operator action | escalate? |
+| --- | --- | --- | --- |
+| valid | Ticket is valid | Admit entry | No |
+| invalid_code | QR is malformed or unreadable | Ask for another copy; rescan once | Yes if repeats |
+| payment_mismatch | QR hash does not match paymentId on-chain | Deny entry; ask for proof of purchase | Yes |
+| not_owner | Ticket owner does not match expected wallet | Deny entry; refer to supervisor | Yes |
+| already_claimed | Ticket already used/claimed | Deny entry; check identity and time | Yes |
+| rate_limited | Too many scans in short time | Wait 30–60s, then scan once | No |
+| lock_hit | Another scan is processing | Wait 10–15s, then scan once | No |
+| temporarily_locked | Temporary lock after repeated failures | Wait 10–15 minutes; rescan once | Yes if urgent |
 
 ## Incident Playbooks
-### KV Down
-- Expect increased lock misses and inability to mark used.
-- Fall back to manual verification using on-chain checks only (slower).
-- Notify ops and monitor KV.
+A) Same ticket scanned twice
+- Say: “This ticket has already been used. I need a supervisor to review.”
+- Do: deny entry; do not rescan repeatedly.
+- Escalate: always.
 
-### RPC Down
-- Verification fails on-chain; return `onchain_error`.
-- Pause scanning if persistent; use offline backup list if available.
+B) Customer says “I bought it” but scan invalid
+- Say: “I can’t validate this code right now; a supervisor will check your proof of purchase.”
+- Do: deny entry; collect order confirmation + wallet info if available.
+- Escalate: always.
 
-### Double Scan Attempts
-- Response should return `already_used`.
-- Validate identity if dispute.
+C) Network slow or temporarily unavailable
+- Say: “Our system is slow right now; please wait a moment.”
+- Do: wait and retry once; avoid rapid rescans.
+- Escalate: if delays exceed 3–5 minutes.
 
-### Customer Claims Mismatch
-- Ask for wallet address and transaction reference.
-- Verify on-chain owner; if mismatch, escalate to ops.
+D) KV / API down (health check fails)
+- Say: “Our verification service is offline; we’re switching to manual review.”
+- Do: stop automated scans; use supervisor-approved fallback process.
+- Escalate: immediately to supervisor/ops.
 
-## Troubleshooting Commands
-Use redacted values; never paste real secrets.
+E) Suspected QR tampering / screenshot reuse
+- Say: “This code isn’t validating; I need a supervisor.”
+- Do: deny entry; do not disclose validation details.
+- Escalate: immediately.
 
-```bash
-curl -sS https://<app-domain>/api/health
-```
+F) Operator mistake (wrong scan / wrong ticket)
+- Say: “Let me rescan the correct code.”
+- Do: rescan once with the correct ticket; avoid repeated attempts.
+- Escalate: if the issue persists.
 
-```bash
-curl -sS -X POST https://<app-domain>/api/gate/verify \
-  -H 'Content-Type: application/json' \
-  -H 'x-operator-key: ***REDACTED***' \
-  -d '{"tokenId": "123", "code": "<uuid-or-bytes32>"}'
-```
+## Offline / Degraded Mode
+- Full offline verification is **not** supported unless a preloaded allowlist exists.
+- If offline: do not admit without supervisor approval.
+- If a manual allowlist is provided by ops, use it exactly as instructed.
+- When back online: re-verify any manually admitted entries and report exceptions.
+
+## Do / Do Not (Quick List)
+- DO: scan once and wait for a result.
+- DO: follow the reason table and escalate when required.
+- DO NOT: admit without supervisor approval.
+- DO NOT: rescan rapidly (rate limiting).
+- DO NOT: accept screenshots if policy forbids.
+
+## Troubleshooting (Short)
+- Camera not focusing: clean lens, improve lighting, try again.
+- App stuck: reload the app and retry once.
+- Lock or rate limit: wait for TTL (10–60s) before rescanning.
+
+## Versioning & Contact
+- Version: 2026-01-28
+- Contact: On-site supervisor → Operations lead → Engineering on-call
