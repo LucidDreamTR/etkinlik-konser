@@ -1,4 +1,4 @@
-export function jsonSafe(data: any, init?: ResponseInit) {
+export function jsonSafe(data: unknown, init?: ResponseInit) {
   return new Response(
     JSON.stringify(data, (_k, v) => (typeof v === "bigint" ? v.toString() : v)),
     {

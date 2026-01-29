@@ -5,6 +5,7 @@ import { createWalletClient, custom, getAddress } from "viem";
 
 import { getExplorerTxUrl } from "@/lib/explorer";
 import { safeJsonStringify } from "@/src/lib/json";
+import { LoadingShimmerText } from "@/src/components/LoadingShimmerText";
 
 type Props = {
   eventId: number;
@@ -215,11 +216,17 @@ export default function MetaMaskPurchase({
           </button>
 
           <button
-            className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
+            className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60"
             onClick={purchase}
             disabled={isBusy || !account}
           >
-            {status === "signing" ? "Signing…" : status === "purchasing" ? "Purchasing…" : "Buy with MetaMask"}
+            {status === "signing" ? (
+              "Signing…"
+            ) : status === "purchasing" ? (
+              <LoadingShimmerText text="Purchasing…" className="font-semibold" />
+            ) : (
+              "Buy with MetaMask"
+            )}
           </button>
         </div>
       )}
