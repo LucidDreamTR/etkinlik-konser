@@ -4,6 +4,7 @@ import * as React from "react";
 import { createWalletClient, custom, getAddress } from "viem";
 
 import { getExplorerTxUrl } from "@/lib/explorer";
+import { safeJsonStringify } from "@/src/lib/json";
 
 type Props = {
   eventId: number;
@@ -130,11 +131,17 @@ export default function MetaMaskPurchase({
       deadline: normalizeJsonValue(deadline),
     };
 
+    console.log("[metamask] intent payload types", {
+      eventId: typeof intent.eventId,
+      amountWei: typeof intent.amountWei,
+      deadline: typeof intent.deadline,
+    });
+
     setStatus("signing");
     const initRes = await fetch("/api/tickets/intent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ intent }),
+      body: safeJsonStringify({ intent }),
     });
     const initJson = (await initRes.json()) as { ok?: boolean; error?: string };
     if (!initRes.ok || !initJson.ok) {
@@ -175,7 +182,7 @@ export default function MetaMaskPurchase({
     const purchaseRes = await fetch("/api/tickets/purchase", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ intent, signature }),
+      body: safeJsonStringify({ intent, signature }),
     });
     const purchaseJson = (await purchaseRes.json()) as { ok?: boolean; txHash?: string; error?: string };
     if (!purchaseRes.ok || !purchaseJson.ok) {
