@@ -7,11 +7,11 @@ type LoadingShimmerTextProps = {
 
 export function LoadingShimmerText({ text, className }: LoadingShimmerTextProps) {
   return (
-    <span className={`relative inline-flex items-center overflow-hidden ${className ?? ""}`} aria-live="polite">
+    <span className={`relative inline-block overflow-hidden ${className ?? ""}`} aria-live="polite">
       <span className="relative z-10">{text}</span>
       <span
         aria-hidden="true"
-        className="shimmer-sweep pointer-events-none absolute inset-0 z-20 bg-gradient-to-r from-transparent via-white/50 to-transparent opacity-50"
+        className="pointer-events-none absolute inset-0 z-20 animate-shimmer-sweep shimmer-overlay"
       />
     </span>
   );

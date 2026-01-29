@@ -179,20 +179,37 @@ export default function MetaMaskPurchase({
       },
     });
 
+    const purchasingStartedAt = Date.now();
     setStatus("purchasing");
-    const purchaseRes = await fetch("/api/tickets/purchase", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: safeJsonStringify({ intent, signature }),
-    });
-    const purchaseJson = (await purchaseRes.json()) as { ok?: boolean; txHash?: string; error?: string };
-    if (!purchaseRes.ok || !purchaseJson.ok) {
-      setStatus("error");
-      setError(purchaseJson.error ?? "Satın alma başarısız.");
-      return;
+    let nextStatus: "success" | "error" = "error";
+    let nextError: string | null = null;
+    let nextTxHash: string | null = null;
+    try {
+      const purchaseRes = await fetch("/api/tickets/purchase", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: safeJsonStringify({ intent, signature }),
+      });
+      const purchaseJson = (await purchaseRes.json()) as { ok?: boolean; txHash?: string; error?: string };
+      if (!purchaseRes.ok || !purchaseJson.ok) {
+        nextError = purchaseJson.error ?? "Satın alma başarısız.";
+      } else {
+        nextStatus = "success";
+        nextTxHash = purchaseJson.txHash ?? null;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Satın alma başarısız.";
+      nextError = message;
+    } finally {
+      const elapsed = Date.now() - purchasingStartedAt;
+      const wait = Math.max(0, 600 - elapsed);
+      if (wait) {
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
+      setTxHash(nextTxHash);
+      setError(nextError);
+      setStatus(nextStatus);
     }
-    setTxHash(purchaseJson.txHash ?? null);
-    setStatus("success");
   }, [account, amountWei, eventId, expectedChainId, splitSlug, ticketContractAddress]);
 
   const isBusy = status === "signing" || status === "purchasing";
@@ -216,7 +233,7 @@ export default function MetaMaskPurchase({
           </button>
 
           <button
-            className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:bg-white/85 disabled:opacity-100"
             onClick={purchase}
             disabled={isBusy || !account}
           >
