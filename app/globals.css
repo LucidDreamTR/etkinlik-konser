@@ -45,7 +45,7 @@ p {
 }
 
 .animate-shimmer-sweep {
-  animation: shimmer-sweep 1.4s ease-in-out infinite;
+  animation: shimmer-sweep 2.24s ease-in-out infinite;
   will-change: background-position;
 }
 

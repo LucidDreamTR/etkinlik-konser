@@ -303,23 +303,23 @@ export default function PayWithMetaMask(props: Props) {
           <div className="text-sm text-amber-200">MetaMask yüklü değil.</div>
         ) : (
           <div className="flex flex-wrap items-center gap-3">
-            <button
-              className="rounded-full border border-white/20 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
-              onClick={connectWallet}
-              disabled={isBusy}
-            >
-              {account ? `Bağlandı: ${account.slice(0, 6)}...${account.slice(-4)}` : "Cüzdanı bağla"}
-            </button>
+          <button
+            className="rounded-full border border-white/20 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-60"
+            onClick={connectWallet}
+            disabled={isBusy}
+          >
+            {account ? `Bağlandı: ${account.slice(0, 6)}...${account.slice(-4)}` : "Cüzdanı bağla"}
+          </button>
 
           <button
-            className="rounded-full border border-white/10 bg-black px-4 py-2 text-sm font-semibold text-white/60 disabled:cursor-not-allowed disabled:opacity-80"
+            className="rounded-full border border-white/20 px-4 py-2 text-sm hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
             onClick={purchase}
             disabled={isBusy || !account}
           >
             {status === "signing" ? (
               "Signing…"
             ) : status === "purchasing" ? (
-              <LoadingShimmerText text="Purchasing…" className="font-semibold text-white/60" />
+              <LoadingShimmerText text="Purchasing…" />
             ) : (
               "Buy with MetaMask"
             )}
