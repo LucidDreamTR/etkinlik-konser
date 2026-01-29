@@ -3,7 +3,8 @@ import { createPublicClient, encodePacked, getAddress, http, recoverTypedDataAdd
 
 import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
 import { getTicketTypeConfig } from "@/data/ticketMetadata";
-import { getOrderByMerchantId, recordPaidOrder } from "@/src/lib/ordersStore";
+import { getOrderByMerchantId, persistOrder, recordPaidOrder } from "@/src/lib/ordersStore";
+import { applyAtLeastTransition } from "@/src/lib/ticketLifecycle";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { purchaseOnchain } from "@/src/server/onchainPurchase";
@@ -283,6 +284,12 @@ export async function POST(request: Request) {
       lockKey = `purchase:lock:${paymentIntentId}`;
       const acquired = await kv.set(lockKey, "1", { nx: true, ex: PURCHASE_LOCK_TTL_SECONDS });
       if (!acquired) {
+        if (existing) {
+          const updated = applyAtLeastTransition(existing, existing.ticketState ?? "intent_created", {
+            purchaseStatus: "pending",
+          });
+          await persistOrder(updated);
+        }
         if (debugEnabled) {
           logger.info("purchase.pending", { merchantOrderId: paymentIntentId, orderId });
         }
@@ -398,9 +405,6 @@ export async function POST(request: Request) {
       intentDeadline: intent.deadline.toString(),
       intentAmountWei: intent.amountWei.toString(),
       claimCodeHash: null,
-      claimStatus: "claimed",
-      claimedTo: buyerChecksumForMessage,
-      claimedAt: new Date().toISOString(),
     });
 
     if (debugEnabled) {

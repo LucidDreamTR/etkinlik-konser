@@ -4,6 +4,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { kv } from "@vercel/kv";
 
 import { getOrderByMerchantId, markOrderClaimed } from "@/src/lib/ordersStore";
+import { ensureTicketState } from "@/src/lib/ticketLifecycle";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { createRateLimiter } from "@/src/server/rateLimit";
 import { getServerEnv } from "@/src/lib/env";
@@ -136,7 +137,8 @@ export async function POST(request: Request) {
 
   const walletAddress = getAddress(payload.walletAddress);
 
-  const order = await getOrderByMerchantId(payload.merchantOrderId);
+  const orderRaw = await getOrderByMerchantId(payload.merchantOrderId);
+  const order = orderRaw ? ensureTicketState(orderRaw) : undefined;
   if (!order) {
     logClaimFail("order_not_found", { tokenId: null, eventId: null, ipHash });
     return jsonNoStore({ ok: false, reason: "order_not_found", error: "Order not found" }, { status: 404 });
@@ -145,7 +147,7 @@ export async function POST(request: Request) {
     logClaimFail("order_not_paid", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     return jsonNoStore({ ok: false, reason: "order_not_paid", error: "Order not paid" }, { status: 400 });
   }
-  if (order.claimStatus !== "unclaimed") {
+  if (order.ticketState === "claimed" || order.ticketState === "gate_validated") {
     const claimedTo = order.claimedTo ? getAddress(order.claimedTo) : null;
     if (claimedTo && claimedTo !== walletAddress) {
       logClaimFail("not_owner", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
@@ -173,6 +175,10 @@ export async function POST(request: Request) {
       }
     );
     return jsonNoStore({ ok: false, reason: "already_claimed", error: "Already claimed" }, { status: 400 });
+  }
+  if (order.ticketState !== "minted" && order.ticketState !== "claimable") {
+    logClaimFail("not_ready", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    return jsonNoStore({ ok: false, reason: "not_ready", error: "Order not ready for claim" }, { status: 400 });
   }
   if (!order.custodyAddress || !order.claimCodeHash) {
     return jsonNoStore(

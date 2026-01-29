@@ -4,7 +4,7 @@ import { kv } from "@vercel/kv";
 
 import { getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
-import { getOrderByTokenId, markOrderClaimed, markTokenUsedOnce } from "@/src/lib/ordersStore";
+import { getOrderByTokenId, markOrderClaimed, markTokenUsedOnce, persistOrder } from "@/src/lib/ordersStore";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { shouldIncludeGateDebug } from "@/src/server/debugFlags";
 import { createRateLimiter } from "@/src/server/rateLimit";
@@ -13,6 +13,7 @@ import { jsonNoStore } from "@/src/lib/http";
 import { emitMetric } from "@/src/lib/metrics";
 import { getChainConfig } from "@/src/lib/chain";
 import { logger } from "@/src/lib/logger";
+import { applyAtLeastTransition, applyTransition, ensureTicketState } from "@/src/lib/ticketLifecycle";
 
 const verifyLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
 const verifyTokenLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
@@ -107,7 +108,7 @@ function respondFailure({
       reason,
       chainId: CHAIN_ID,
       tokenId,
-      eventId,
+      ...(debugEnabled ? { eventId } : {}),
       ...(typeof owner === "string" ? { owner } : {}),
       ...(typeof claimed === "boolean" ? { claimed } : {}),
       ...(details ? { details } : {}),
@@ -181,7 +182,7 @@ export async function POST(request: Request) {
           reason: "rate_limited",
           chainId: CHAIN_ID,
           tokenId: "unknown",
-          eventId: null,
+          ...(debugEnabled ? { eventId: null } : {}),
         },
         { status: 429, headers: { "Retry-After": String(retryAfter) } }
       );
@@ -246,7 +247,7 @@ export async function POST(request: Request) {
           reason: "rate_limited",
           chainId: CHAIN_ID,
           tokenId: tokenIdString,
-          eventId: null,
+          ...(debugEnabled ? { eventId: null } : {}),
         },
         { status: 429, headers: { "Retry-After": String(retryAfter) } }
       );
@@ -463,11 +464,75 @@ export async function POST(request: Request) {
       });
     }
 
-    const order = await getOrderByTokenId(tokenIdString);
+    const orderRaw = await getOrderByTokenId(tokenIdString);
+    const order = orderRaw ? ensureTicketState(orderRaw) : undefined;
     const claimedToStored: string | null = order?.claimedTo ?? null;
     const claimedToOnchain: string | null = owner ?? null;
     let claimedToMismatchHealed = false;
-    if (order?.claimedTo && owner) {
+    if (!order) {
+      logGateFailure("not_claimed", tokenIdString, eventId, ipHash);
+      emitMetric("gate_invalid", {
+        route,
+        tokenId: tokenIdString,
+        ip,
+        reason: "not_claimed",
+        latencyMs: Date.now() - startedAt,
+      });
+      return respondFailure({
+        ok: true,
+        reason: "not_claimed",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId,
+        owner,
+        claimed,
+        details: "Order not found for token",
+        debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
+      });
+    }
+
+    if (order.ticketState === "gate_validated") {
+      logGateFailure("already_used", tokenIdString, eventId, ipHash);
+      emitMetric(
+        "gate_invalid",
+        { route, tokenId: tokenIdString, ip, reason: "already_used", latencyMs: Date.now() - startedAt }
+      );
+      return respondFailure({
+        ok: true,
+        reason: "already_used",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId,
+        owner,
+        claimed,
+        details: "Ticket already used",
+        debugExtras: debugEnabled ? { claimedToStored, claimedToOnchain, claimedToMismatchHealed } : undefined,
+      });
+    }
+
+    if (order.ticketState !== "claimed") {
+      logGateFailure("not_claimed", tokenIdString, eventId, ipHash);
+      emitMetric("gate_invalid", {
+        route,
+        tokenId: tokenIdString,
+        ip,
+        reason: "not_claimed",
+        latencyMs: Date.now() - startedAt,
+      });
+      return respondFailure({
+        ok: true,
+        reason: "not_claimed",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId,
+        owner,
+        claimed,
+        details: "Ticket not in claimed state",
+        debugExtras: debugEnabled ? { claimedToStored, claimedToOnchain, claimedToMismatchHealed } : undefined,
+      });
+    }
+
+    if (order.claimedTo && owner) {
       try {
         const claimedTo = getAddress(order.claimedTo);
         if (claimedTo !== owner) {
@@ -521,6 +586,11 @@ export async function POST(request: Request) {
       eventId,
     });
     if (useResult.alreadyUsed) {
+      const updated = applyAtLeastTransition(order, "gate_validated", {
+        usedAt: useResult.usedAt,
+        gateValidatedAt: useResult.usedAt,
+      });
+      await persistOrder(updated);
       logGateFailure("already_used", tokenIdString, eventId, ipHash);
       emitMetric(
         "gate_invalid",
@@ -541,6 +611,13 @@ export async function POST(request: Request) {
       });
     }
 
+    const updatedOrder = applyTransition(order, "gate_validated", {
+      usedAt: useResult.usedAt,
+      gateValidatedAt: useResult.usedAt,
+      eventId: order.eventId || eventId,
+    });
+    await persistOrder(updatedOrder);
+
     logGateSuccess(tokenIdString, eventId, ipHash);
 
     emitMetric(
@@ -554,7 +631,7 @@ export async function POST(request: Request) {
       chainId: CHAIN_ID,
       tokenId: tokenIdString,
       owner,
-      eventId,
+      ...(debugEnabled ? { eventId } : {}),
       claimed,
       ...(debugEnabled
         ? { paymentIdOnchain, expectedHash, claimedToStored, claimedToOnchain, claimedToMismatchHealed }

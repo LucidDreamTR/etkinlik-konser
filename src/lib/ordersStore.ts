@@ -2,8 +2,17 @@ import { promises as fs } from "fs";
 import path from "path";
 import { kv } from "@vercel/kv";
 
+import {
+  applyAtLeastTransition,
+  applyTransition,
+  ensureTicketState,
+  TicketState,
+  TicketStateTransitionError,
+} from "@/src/lib/ticketLifecycle";
+
 export type PaymentStatus = "paid" | "pending" | "failed" | string;
 export type ClaimStatus = "unclaimed" | "claimed";
+export type PurchaseStatus = "pending" | "processed" | "duplicate";
 
 export type PaymentOrder = {
   merchantOrderId: string;
@@ -17,6 +26,8 @@ export type PaymentOrder = {
   paymentPreimage?: string | null;
   amountTry: string;
   payment_status: PaymentStatus;
+  purchaseStatus?: PurchaseStatus | null;
+  ticketState?: TicketState | null;
   txHash?: string | null;
   intentSignature?: string | null;
   intentDeadline?: string | null;
@@ -34,6 +45,7 @@ export type PaymentOrder = {
   chainClaimError?: string | null;
   usedAt?: string | null;
   usedBy?: string | null;
+  gateValidatedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -44,6 +56,7 @@ const isProd = process.env.NODE_ENV === "production";
 const ORDER_KEY_PREFIX = "order:";
 const TOKEN_INDEX_PREFIX = "order:token:";
 const USED_KEY_PREFIX = "used:token:";
+const USED_EVENT_PREFIX = "used:event:";
 
 function orderKey(merchantOrderId: string): string {
   return `${ORDER_KEY_PREFIX}${merchantOrderId}`;
@@ -55,6 +68,14 @@ function tokenIndexKey(tokenId: string): string {
 
 function usedKey(tokenId: string): string {
   return `${USED_KEY_PREFIX}${tokenId}`;
+}
+
+function usedEventKey(eventId: string, tokenId: string): string {
+  return `${USED_EVENT_PREFIX}${eventId}:token:${tokenId}`;
+}
+
+function withTicketState(order: PaymentOrder): PaymentOrder {
+  return ensureTicketState(order);
 }
 
 function ensureKvConfigured(): void {
@@ -127,10 +148,11 @@ export async function getOrderByMerchantId(merchantOrderId: string): Promise<Pay
   if (isProd) {
     ensureKvConfigured();
     const stored = await kv.get<PaymentOrder>(orderKey(merchantOrderId));
-    return stored ?? undefined;
+    return stored ? withTicketState(stored) : undefined;
   }
   const orders = await readStore();
-  return orders.find((order) => order.merchantOrderId === merchantOrderId);
+  const found = orders.find((order) => order.merchantOrderId === merchantOrderId);
+  return found ? withTicketState(found) : undefined;
 }
 
 export async function getOrderByTokenId(tokenId: string): Promise<PaymentOrder | undefined> {
@@ -139,29 +161,36 @@ export async function getOrderByTokenId(tokenId: string): Promise<PaymentOrder |
     const merchantOrderId = await kv.get<string>(tokenIndexKey(tokenId));
     if (!merchantOrderId) return undefined;
     const stored = await kv.get<PaymentOrder>(orderKey(merchantOrderId));
-    return stored ?? undefined;
+    return stored ? withTicketState(stored) : undefined;
   }
   const orders = await readStore();
-  return orders.find((order) => order.tokenId === tokenId);
+  const found = orders.find((order) => order.tokenId === tokenId);
+  return found ? withTicketState(found) : undefined;
 }
 
 async function saveOrder(order: PaymentOrder): Promise<void> {
+  const normalized = withTicketState(order);
   if (isProd) {
     ensureKvConfigured();
-    await kv.set(orderKey(order.merchantOrderId), order);
-    if (order.tokenId) {
-      await kv.set(tokenIndexKey(order.tokenId), order.merchantOrderId);
+    await kv.set(orderKey(normalized.merchantOrderId), normalized);
+    if (normalized.tokenId) {
+      await kv.set(tokenIndexKey(normalized.tokenId), normalized.merchantOrderId);
     }
     return;
   }
   const orders = await readStore();
-  const index = orders.findIndex((entry) => entry.merchantOrderId === order.merchantOrderId);
+  const index = orders.findIndex((entry) => entry.merchantOrderId === normalized.merchantOrderId);
   if (index >= 0) {
-    orders[index] = order;
+    orders[index] = normalized;
   } else {
-    orders.push(order);
+    orders.push(normalized);
   }
   await writeStore(orders);
+}
+
+export async function persistOrder(order: PaymentOrder): Promise<PaymentOrder> {
+  await saveOrder(order);
+  return order;
 }
 
 export async function recordPaidOrder(
@@ -173,38 +202,46 @@ export async function recordPaidOrder(
   const existing = await getOrderByMerchantId(order.merchantOrderId);
   if (existing) {
     if (!existing.txHash) {
-      existing.txHash = order.txHash;
-      existing.orderId = order.orderId ?? existing.orderId ?? null;
-      existing.payment_status = "paid";
-      existing.intentSignature = order.intentSignature ?? existing.intentSignature ?? null;
-      existing.intentDeadline = order.intentDeadline ?? existing.intentDeadline ?? null;
-      existing.intentAmountWei = order.intentAmountWei ?? existing.intentAmountWei ?? null;
-      existing.tokenId = order.tokenId ?? existing.tokenId ?? null;
-      existing.nftAddress = order.nftAddress ?? existing.nftAddress ?? null;
-      existing.custodyAddress = order.custodyAddress ?? existing.custodyAddress ?? null;
-      existing.claimCodeHash = order.claimCodeHash ?? existing.claimCodeHash ?? null;
-      existing.claimExpiresAt = order.claimExpiresAt ?? existing.claimExpiresAt ?? null;
-      existing.claimStatus = order.claimStatus ?? existing.claimStatus ?? null;
-      existing.claimedTo = order.claimedTo ?? existing.claimedTo ?? null;
-      existing.claimedAt = order.claimedAt ?? existing.claimedAt ?? null;
-      existing.chainClaimed = order.chainClaimed ?? existing.chainClaimed ?? null;
-      existing.chainClaimTxHash = order.chainClaimTxHash ?? existing.chainClaimTxHash ?? null;
-      existing.chainClaimError = order.chainClaimError ?? existing.chainClaimError ?? null;
-      existing.usedAt = order.usedAt ?? existing.usedAt ?? null;
-      existing.usedBy = order.usedBy ?? existing.usedBy ?? null;
-      existing.updatedAt = new Date().toISOString();
-      await saveOrder(existing);
+      const updated = applyAtLeastTransition(existing, "minted", {
+        txHash: order.txHash,
+        orderId: order.orderId ?? existing.orderId ?? null,
+        payment_status: "paid",
+        purchaseStatus: "processed",
+        intentSignature: order.intentSignature ?? existing.intentSignature ?? null,
+        intentDeadline: order.intentDeadline ?? existing.intentDeadline ?? null,
+        intentAmountWei: order.intentAmountWei ?? existing.intentAmountWei ?? null,
+        tokenId: order.tokenId ?? existing.tokenId ?? null,
+        nftAddress: order.nftAddress ?? existing.nftAddress ?? null,
+        custodyAddress: order.custodyAddress ?? existing.custodyAddress ?? null,
+        claimCodeHash: order.claimCodeHash ?? existing.claimCodeHash ?? null,
+        claimExpiresAt: order.claimExpiresAt ?? existing.claimExpiresAt ?? null,
+        claimStatus: order.claimStatus ?? existing.claimStatus ?? null,
+        claimedTo: order.claimedTo ?? existing.claimedTo ?? null,
+        claimedAt: order.claimedAt ?? existing.claimedAt ?? null,
+        chainClaimed: order.chainClaimed ?? existing.chainClaimed ?? null,
+        chainClaimTxHash: order.chainClaimTxHash ?? existing.chainClaimTxHash ?? null,
+        chainClaimError: order.chainClaimError ?? existing.chainClaimError ?? null,
+        usedAt: order.usedAt ?? existing.usedAt ?? null,
+        usedBy: order.usedBy ?? existing.usedBy ?? null,
+      });
+      await saveOrder(updated);
+      return { order: updated, created: false };
     }
     return { order: existing, created: false };
   }
 
   const now = new Date().toISOString();
-  const createdOrder: PaymentOrder = {
-    ...order,
-    payment_status: "paid",
-    createdAt: now,
-    updatedAt: now,
-  };
+  const createdOrder: PaymentOrder = applyTransition(
+    {
+      ...order,
+      payment_status: "paid",
+      purchaseStatus: "processed",
+      createdAt: now,
+      updatedAt: now,
+      ticketState: order.tokenId ? "minted" : "paid",
+    },
+    order.tokenId ? "minted" : "paid"
+  );
 
   await saveOrder(createdOrder);
   return { order: createdOrder, created: true };
@@ -231,29 +268,35 @@ export async function recordOrderStatus(
 ): Promise<{ order: PaymentOrder; created: boolean }> {
   const existing = await getOrderByMerchantId(order.merchantOrderId);
   if (existing) {
-    return { order: existing, created: false };
+    return { order: withTicketState(existing), created: false };
   }
 
   const now = new Date().toISOString();
-  const createdOrder: PaymentOrder = {
-    ...order,
-    txHash: null,
-    tokenId: null,
-    nftAddress: null,
-    custodyAddress: null,
-    claimCodeHash: null,
-    claimExpiresAt: null,
-    claimStatus: "unclaimed",
-    claimedTo: null,
-    claimedAt: null,
-    chainClaimed: null,
-    chainClaimTxHash: null,
-    chainClaimError: null,
-    usedAt: null,
-    usedBy: null,
-    createdAt: now,
-    updatedAt: now,
-  };
+  const createdOrder: PaymentOrder = applyTransition(
+    {
+      ...order,
+      txHash: null,
+      tokenId: null,
+      nftAddress: null,
+      custodyAddress: null,
+      claimCodeHash: null,
+      claimExpiresAt: null,
+      claimStatus: "unclaimed",
+      claimedTo: null,
+      claimedAt: null,
+      chainClaimed: null,
+      chainClaimTxHash: null,
+      chainClaimError: null,
+      usedAt: null,
+      usedBy: null,
+      gateValidatedAt: null,
+      purchaseStatus: order.purchaseStatus ?? null,
+      ticketState: "intent_created",
+      createdAt: now,
+      updatedAt: now,
+    },
+    "intent_created"
+  );
 
   await saveOrder(createdOrder);
   return { order: createdOrder, created: true };
@@ -273,16 +316,24 @@ export async function markOrderClaimed(args: {
     throw new Error("Order not found");
   }
 
-  existing.claimStatus = "claimed";
-  existing.claimedTo = args.claimedTo;
-  existing.claimedAt = args.claimedAt;
-  existing.txHash = existing.txHash ?? args.txHash;
-  existing.chainClaimed = args.chainClaimed ?? existing.chainClaimed ?? null;
-  existing.chainClaimTxHash = args.chainClaimTxHash ?? existing.chainClaimTxHash ?? null;
-  existing.chainClaimError = args.chainClaimError ?? existing.chainClaimError ?? null;
-  existing.updatedAt = new Date().toISOString();
-  await saveOrder(existing);
-  return existing;
+  try {
+    const updated = applyAtLeastTransition(existing, "claimed", {
+      claimStatus: "claimed",
+      claimedTo: args.claimedTo,
+      claimedAt: args.claimedAt,
+      txHash: existing.txHash ?? args.txHash,
+      chainClaimed: args.chainClaimed ?? existing.chainClaimed ?? null,
+      chainClaimTxHash: args.chainClaimTxHash ?? existing.chainClaimTxHash ?? null,
+      chainClaimError: args.chainClaimError ?? existing.chainClaimError ?? null,
+    });
+    await saveOrder(updated);
+    return updated;
+  } catch (error) {
+    if (error instanceof TicketStateTransitionError) {
+      throw error;
+    }
+    throw error;
+  }
 }
 
 export async function markTokenUsedOnce(args: {
@@ -290,10 +341,29 @@ export async function markTokenUsedOnce(args: {
   owner?: string | null;
   eventId?: string | null;
 }): Promise<{ alreadyUsed: boolean; usedAt: string }> {
+  if (!args.eventId) {
+    throw new Error("Missing eventId for token use");
+  }
   const usedAt = new Date().toISOString();
   if (isProd) {
     ensureKvConfigured();
-    const result = await kv.set(usedKey(args.tokenId), { usedAt, owner: args.owner ?? null, eventId: args.eventId ?? null }, { nx: true });
+    const eventScopedKey = usedEventKey(args.eventId, args.tokenId);
+    const legacyKey = usedKey(args.tokenId);
+    const legacy = await kv.get<{ usedAt?: string; owner?: string | null; eventId?: string | null }>(legacyKey);
+    if (legacy) {
+      await kv.set(
+        eventScopedKey,
+        { usedAt: legacy.usedAt ?? usedAt, owner: legacy.owner ?? args.owner ?? null, eventId: args.eventId },
+        { nx: true }
+      );
+      return { alreadyUsed: true, usedAt: legacy.usedAt ?? usedAt };
+    }
+
+    const result = await kv.set(
+      eventScopedKey,
+      { usedAt, owner: args.owner ?? null, eventId: args.eventId },
+      { nx: true }
+    );
     if (result === null) {
       return { alreadyUsed: true, usedAt };
     }
@@ -301,10 +371,22 @@ export async function markTokenUsedOnce(args: {
   }
 
   const used = await readUsedStore();
-  if (used[args.tokenId]) {
-    return { alreadyUsed: true, usedAt: used[args.tokenId].usedAt };
+  const legacyKey = args.tokenId;
+  const eventScopedKey = usedEventKey(args.eventId, args.tokenId);
+  const legacy = used[legacyKey];
+  if (legacy) {
+    used[eventScopedKey] = used[eventScopedKey] ?? {
+      usedAt: legacy.usedAt ?? usedAt,
+      owner: legacy.owner ?? args.owner ?? null,
+      eventId: args.eventId,
+    };
+    await writeUsedStore(used);
+    return { alreadyUsed: true, usedAt: legacy.usedAt ?? usedAt };
   }
-  used[args.tokenId] = { usedAt, owner: args.owner ?? null, eventId: args.eventId ?? null };
+  if (used[eventScopedKey]) {
+    return { alreadyUsed: true, usedAt: used[eventScopedKey].usedAt };
+  }
+  used[eventScopedKey] = { usedAt, owner: args.owner ?? null, eventId: args.eventId };
   await writeUsedStore(used);
   return { alreadyUsed: false, usedAt };
 }

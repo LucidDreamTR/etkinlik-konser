@@ -3,7 +3,8 @@ import { getAddress, verifyTypedData } from "viem";
 import { kv } from "@vercel/kv";
 
 import { EVENTS } from "@/data/events";
-import { getOrderByMerchantId, recordOrderStatus } from "@/src/lib/ordersStore";
+import { getOrderByMerchantId, persistOrder, recordOrderStatus } from "@/src/lib/ordersStore";
+import { applyAtLeastTransition } from "@/src/lib/ticketLifecycle";
 import { computeOrderId } from "@/src/server/orderId";
 import { createRateLimiter } from "@/src/server/rateLimit";
 import { getTicketContractAddress } from "@/lib/site";
@@ -167,6 +168,17 @@ export async function POST(request: Request) {
           intentDeadline: intent.deadline?.toString?.() ?? "",
           payment_status: "pending",
         });
+      } else {
+        const updated = applyAtLeastTransition(existing, "intent_created", {
+          orderId: existing.orderId ?? orderId,
+          eventId: existing.eventId ?? intent.eventId.toString(),
+          splitSlug: existing.splitSlug ?? splitSlug,
+          buyerAddress: existing.buyerAddress ?? buyerChecksum,
+          amountTry: existing.amountTry ?? (intent.amountWei?.toString?.() ?? "0"),
+          intentAmountWei: existing.intentAmountWei ?? (intent.amountWei?.toString?.() ?? "0"),
+          intentDeadline: existing.intentDeadline ?? (intent.deadline?.toString?.() ?? ""),
+        });
+        await persistOrder(updated);
       }
       if (lockKey) {
         await kv.del(lockKey).catch(() => {});
@@ -304,6 +316,17 @@ export async function POST(request: Request) {
           intentDeadline: intent.deadline?.toString?.() ?? "",
           payment_status: "pending",
         });
+      } else {
+        const updated = applyAtLeastTransition(existing, "intent_created", {
+          orderId: existing.orderId ?? orderId,
+          eventId: existing.eventId ?? intent.eventId.toString(),
+          splitSlug: existing.splitSlug ?? splitSlug,
+          buyerAddress: existing.buyerAddress ?? buyerChecksumForMessage,
+          amountTry: existing.amountTry ?? (intent.amountWei?.toString?.() ?? "0"),
+          intentAmountWei: existing.intentAmountWei ?? (intent.amountWei?.toString?.() ?? "0"),
+          intentDeadline: existing.intentDeadline ?? (intent.deadline?.toString?.() ?? ""),
+        });
+        await persistOrder(updated);
       }
       if (lockKey) {
         await kv.del(lockKey).catch(() => {});
