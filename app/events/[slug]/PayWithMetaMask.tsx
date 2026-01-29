@@ -34,6 +34,10 @@ type Eip1193Provider = {
   request: (args: { method: string; params?: unknown[] | Record<string, unknown> }) => Promise<unknown>;
 };
 
+function normalizeJsonValue(value: string | number | bigint): string {
+  return typeof value === "bigint" ? value.toString() : String(value);
+}
+
 const INTENT_TYPES = {
   TicketIntent: [
     { name: "buyer", type: "address" },
@@ -156,9 +160,9 @@ export default function PayWithMetaMask(props: Props) {
       buyer: account,
       splitSlug: resolvedEvent.event.planId,
       merchantOrderId,
-      eventId: String(eventIdNumber),
-      amountWei: props.ticketPriceWei.toString(),
-      deadline: String(deadline),
+      eventId: normalizeJsonValue(eventIdNumber),
+      amountWei: normalizeJsonValue(props.ticketPriceWei),
+      deadline: normalizeJsonValue(deadline),
       ticketType,
       seat,
     };
