@@ -45,5 +45,7 @@ p {
 }
 
 .shimmer-sweep {
-  animation: shimmer-sweep 1.4s ease-in-out infinite;
+  animation: shimmer-sweep 1.3s ease-in-out infinite;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  will-change: transform;
 }
