@@ -37,25 +37,29 @@ p {
 
 @keyframes shimmer-sweep {
   0% {
-    transform: translateX(-120%);
+    background-position: 200% 0;
   }
   100% {
-    transform: translateX(120%);
+    background-position: -200% 0;
   }
 }
 
 .animate-shimmer-sweep {
-  animation: shimmer-sweep 1.6s ease-in-out infinite;
-  will-change: transform;
+  animation: shimmer-sweep 1.4s ease-in-out infinite;
+  will-change: background-position;
 }
 
-.shimmer-overlay {
-  background: linear-gradient(
+.shimmer-text {
+  color: transparent;
+  background-image: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(255, 255, 255, 0.22) 45%,
-    rgba(255, 255, 255, 0.22) 55%,
+    rgba(255, 255, 255, 0) 35%,
+    rgba(255, 255, 255, 0.55) 50%,
+    rgba(255, 255, 255, 0) 65%,
     transparent 100%
   );
-  opacity: 0.5;
+  background-clip: text;
+  -webkit-background-clip: text;
+  background-size: 220% 100%;
 }

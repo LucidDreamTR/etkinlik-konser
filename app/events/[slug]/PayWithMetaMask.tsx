@@ -312,14 +312,14 @@ export default function PayWithMetaMask(props: Props) {
             </button>
 
           <button
-            className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black/80 disabled:cursor-not-allowed disabled:bg-white/90 disabled:opacity-100 disabled:shadow-none disabled:ring-1 disabled:ring-white/15"
+            className="rounded-full border border-white/10 bg-black px-4 py-2 text-sm font-semibold text-white/60 disabled:cursor-not-allowed disabled:opacity-80"
             onClick={purchase}
             disabled={isBusy || !account}
           >
             {status === "signing" ? (
               "Signing…"
             ) : status === "purchasing" ? (
-              <LoadingShimmerText text="Purchasing…" className="font-semibold" />
+              <LoadingShimmerText text="Purchasing…" className="font-semibold text-white/60" />
             ) : (
               "Buy with MetaMask"
             )}
