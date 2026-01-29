@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { getAddress, verifyTypedData } from "viem";
+import { getAddress } from "viem";
 import { kv } from "@vercel/kv";
 
 import { EVENTS } from "@/data/events";
@@ -45,10 +45,6 @@ const INTENT_LOCK_TTL_SECONDS = 60;
 const env = getServerEnv();
 const chain = getChainConfig();
 const debugEnabled = isProdDebugEnabled();
-const allowUnsignedIntent = env.ALLOW_UNSIGNED_INTENT;
-const isLocalDev = process.env.NODE_ENV === "development" && !process.env.VERCEL_ENV;
-// In production, signature is always required even if ALLOW_UNSIGNED_INTENT is set.
-const shouldAllowUnsignedIntent = env.VERCEL_ENV !== "production" && (allowUnsignedIntent || isLocalDev);
 const hasKv = Boolean(env.KV_REST_API_URL && env.KV_REST_API_TOKEN);
 
 function getClientIp(headers: Headers): string {
@@ -95,13 +91,11 @@ export async function POST(request: Request) {
     let payload: IntentPayload;
     try {
       payload = JSON.parse(raw) as IntentPayload;
-    } catch (error) {
+    } catch {
       return errorResponse("invalid_json", "Invalid JSON", 400);
     }
 
     const intent = payload.intent;
-    const signature = payload.signature;
-
     if (!intent) {
       return errorResponse("missing_intent", "Missing intent", 400);
     }
@@ -122,69 +116,7 @@ export async function POST(request: Request) {
     }
     const defaultEvent = EVENTS[0];
     const splitSlug = intent.splitSlug ?? defaultEvent?.splitId ?? defaultEvent?.planId ?? defaultEvent?.slug ?? "";
-    if (!intent.splitSlug || !intent.merchantOrderId) {
-      if (!shouldAllowUnsignedIntent) {
-        return errorResponse("missing_signature", "Signature required", 401);
-      }
-      const paymentIntentId = intent.merchantOrderId?.trim() || crypto.randomUUID();
-      const orderId = computeOrderId({
-        paymentIntentId,
-        buyer: buyerChecksum,
-        eventId: normalizeBigInt(intent.eventId),
-        chainId: chain.chainId,
-      });
-
-      if (hasKv) {
-        lockKey = `intent:lock:${paymentIntentId}`;
-        const acquired = await kv.set(lockKey, "1", { nx: true, ex: INTENT_LOCK_TTL_SECONDS });
-        if (!acquired) {
-          emitMetric(
-            "lock_hit",
-            {
-              route,
-              merchantOrderId: paymentIntentId,
-              ip: clientIp,
-              reason: "lock",
-              latencyMs: Date.now() - startedAt,
-            }
-          );
-          return jsonNoStore(
-            { ok: true, status: "pending", paymentIntentId, orderId },
-            { status: 202 }
-          );
-        }
-      }
-
-      const existing = await getOrderByMerchantId(paymentIntentId);
-      if (!existing) {
-        await recordOrderStatus({
-          merchantOrderId: paymentIntentId,
-          orderId,
-          eventId: intent.eventId.toString(),
-          splitSlug,
-          buyerAddress: buyerChecksum,
-          amountTry: intent.amountWei?.toString?.() ?? "0",
-          intentAmountWei: intent.amountWei?.toString?.() ?? "0",
-          intentDeadline: intent.deadline?.toString?.() ?? "",
-          payment_status: "pending",
-        });
-      } else {
-        const updated = applyAtLeastTransition(existing, "intent_created", {
-          orderId: existing.orderId ?? orderId,
-          eventId: existing.eventId ?? intent.eventId.toString(),
-          splitSlug: existing.splitSlug ?? splitSlug,
-          buyerAddress: existing.buyerAddress ?? buyerChecksum,
-          amountTry: existing.amountTry ?? (intent.amountWei?.toString?.() ?? "0"),
-          intentAmountWei: existing.intentAmountWei ?? (intent.amountWei?.toString?.() ?? "0"),
-          intentDeadline: existing.intentDeadline ?? (intent.deadline?.toString?.() ?? ""),
-        });
-        await persistOrder(updated);
-      }
-      if (lockKey) {
-        await kv.del(lockKey).catch(() => {});
-      }
-      return jsonNoStore({ ok: true, status: existing ? "duplicate" : "created", paymentIntentId, orderId });
-    }
+    const paymentIntentId = intent.merchantOrderId?.trim() || crypto.randomUUID();
 
     let verifyingContract: `0x${string}`;
     try {
@@ -206,17 +138,10 @@ export async function POST(request: Request) {
       verifyingContract,
     } as const;
 
-    let buyerChecksumForMessage: `0x${string}`;
-    try {
-      buyerChecksumForMessage = getAddress(String(intent.buyer));
-    } catch {
-      return errorResponse("invalid_buyer", "Invalid buyer before verifyTypedData", 400);
-    }
-
     const message = {
-      buyer: buyerChecksumForMessage,
-      splitSlug: intent.splitSlug,
-      merchantOrderId: intent.merchantOrderId,
+      buyer: buyerChecksum,
+      splitSlug,
+      merchantOrderId: paymentIntentId,
       eventId: normalizeBigInt(intent.eventId),
       amountWei: normalizeBigInt(intent.amountWei),
       deadline: normalizeBigInt(intent.deadline),
@@ -273,10 +198,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const paymentIntentId = intent.merchantOrderId;
     const orderId = computeOrderId({
       paymentIntentId,
-      buyer: buyerChecksumForMessage,
+      buyer: buyerChecksum,
       eventId: normalizeBigInt(intent.eventId),
       chainId: chain.chainId,
     });
@@ -299,18 +223,14 @@ export async function POST(request: Request) {
       }
     }
 
-    if (!signature || !signature.trim()) {
-      if (!shouldAllowUnsignedIntent) {
-        return errorResponse("missing_signature", "Signature required", 401);
-      }
-      const existing = await getOrderByMerchantId(paymentIntentId);
-      if (!existing) {
+    const existing = await getOrderByMerchantId(paymentIntentId);
+    if (!existing) {
         await recordOrderStatus({
           merchantOrderId: paymentIntentId,
           orderId,
           eventId: intent.eventId.toString(),
           splitSlug,
-          buyerAddress: buyerChecksumForMessage,
+          buyerAddress: buyerChecksum,
           amountTry: intent.amountWei?.toString?.() ?? "0",
           intentAmountWei: intent.amountWei?.toString?.() ?? "0",
           intentDeadline: intent.deadline?.toString?.() ?? "",
@@ -321,56 +241,12 @@ export async function POST(request: Request) {
           orderId: existing.orderId ?? orderId,
           eventId: existing.eventId ?? intent.eventId.toString(),
           splitSlug: existing.splitSlug ?? splitSlug,
-          buyerAddress: existing.buyerAddress ?? buyerChecksumForMessage,
+          buyerAddress: existing.buyerAddress ?? buyerChecksum,
           amountTry: existing.amountTry ?? (intent.amountWei?.toString?.() ?? "0"),
           intentAmountWei: existing.intentAmountWei ?? (intent.amountWei?.toString?.() ?? "0"),
           intentDeadline: existing.intentDeadline ?? (intent.deadline?.toString?.() ?? ""),
         });
-        await persistOrder(updated);
-      }
-      if (lockKey) {
-        await kv.del(lockKey).catch(() => {});
-      }
-      return jsonNoStore({ ok: true, status: existing ? "duplicate" : "created", paymentIntentId, orderId });
-    }
-
-    const normalizedSig = signature.trim();
-    const isHexSig = /^0x[0-9a-fA-F]{130}$/.test(normalizedSig);
-    if (!isHexSig) {
-      return errorResponse("invalid_signature", "Invalid signature", 401);
-    }
-
-    const verified = await verifyTypedData({
-      address: message.buyer,
-      domain,
-      types: INTENT_TYPES,
-      primaryType: "TicketIntent",
-      message,
-      signature: normalizedSig as `0x${string}`,
-    });
-
-    if (!verified) {
-      return errorResponse("invalid_signature", "Invalid signature", 401);
-    }
-
-    const existing = await getOrderByMerchantId(paymentIntentId);
-    if (existing) {
-      if (existing.txHash) {
-      if (lockKey) {
-        await kv.del(lockKey).catch(() => {});
-      }
-      return jsonNoStore({
-        ok: true,
-        status: "duplicate",
-        txHash: existing.txHash,
-        paymentIntentId,
-        orderId,
-      });
-    }
-      if (lockKey) {
-        await kv.del(lockKey).catch(() => {});
-      }
-      return jsonNoStore({ ok: true, status: "duplicate", paymentIntentId, orderId });
+      await persistOrder(updated);
     }
 
     if (lockKey) {
@@ -378,9 +254,14 @@ export async function POST(request: Request) {
     }
     return jsonNoStore({
       ok: true,
-      status: "verified",
+      status: existing ? "duplicate" : "created",
       paymentIntentId,
+      merchantOrderId: paymentIntentId,
       orderId,
+      domain,
+      types: INTENT_TYPES,
+      message,
+      intentToSign: { domain, types: INTENT_TYPES, primaryType: "TicketIntent", message },
     });
   } catch (error) {
     logger.error("intent.error", { error });

@@ -28,6 +28,7 @@ Same-state transitions are always permitted for idempotency.
   - success with txHash → `minted` (and implicitly `paid`).
   - pending → no state change, `purchaseStatus="pending"`.
   - duplicate → no state change.
+  - signature is required here (intent is unsigned).
 - `/api/tickets/claim`:
   - allowed from `minted` or `claimable`.
   - success → `claimed`.
