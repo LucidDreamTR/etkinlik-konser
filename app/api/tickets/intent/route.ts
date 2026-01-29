@@ -10,6 +10,7 @@ import { createRateLimiter } from "@/src/server/rateLimit";
 import { getTicketContractAddress } from "@/lib/site";
 import { getServerEnv } from "@/src/lib/env";
 import { jsonNoStore } from "@/src/lib/http";
+import { toJsonSafe } from "@/src/lib/json";
 import { emitMetric } from "@/src/lib/metrics";
 import { getChainConfig } from "@/src/lib/chain";
 import { logger } from "@/src/lib/logger";
@@ -252,17 +253,19 @@ export async function POST(request: Request) {
     if (lockKey) {
       await kv.del(lockKey).catch(() => {});
     }
-    return jsonNoStore({
-      ok: true,
-      status: existing ? "duplicate" : "created",
-      paymentIntentId,
-      merchantOrderId: paymentIntentId,
-      orderId,
-      domain,
-      types: INTENT_TYPES,
-      message,
-      intentToSign: { domain, types: INTENT_TYPES, primaryType: "TicketIntent", message },
-    });
+    return jsonNoStore(
+      toJsonSafe({
+        ok: true,
+        status: existing ? "duplicate" : "created",
+        paymentIntentId,
+        merchantOrderId: paymentIntentId,
+        orderId,
+        domain,
+        types: INTENT_TYPES,
+        message,
+        intentToSign: { domain, types: INTENT_TYPES, primaryType: "TicketIntent", message },
+      })
+    );
   } catch (error) {
     logger.error("intent.error", { error });
     const message = error instanceof Error ? error.message : String(error);
