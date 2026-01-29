@@ -6,7 +6,6 @@ import { getTicketTypeConfig } from "@/data/ticketMetadata";
 import { getOrderByMerchantId, persistOrder, recordPaidOrder } from "@/src/lib/ordersStore";
 import { applyAtLeastTransition } from "@/src/lib/ticketLifecycle";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
-import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { purchaseOnchain } from "@/src/server/onchainPurchase";
 import { getServerEnv } from "@/src/lib/env";
 import { jsonNoStore } from "@/src/lib/http";
@@ -15,6 +14,7 @@ import { getChainConfig } from "@/src/lib/chain";
 import { logger } from "@/src/lib/logger";
 import { isProdDebugEnabled } from "@/src/lib/debug";
 import { createRateLimiter } from "@/src/server/rateLimit";
+import { extractMintedTokenIdFromReceipt } from "@/src/lib/txLogs";
 
 type TicketIntent = {
   buyer: string;
@@ -91,17 +91,6 @@ function resolveTicketSelection(eventIdNumber: number, ticketTypeRaw: string | n
 
 function errorResponse(reason: string, error: string, status: number, extra?: Record<string, unknown>) {
   return jsonNoStore({ ok: false, reason, error, ...(extra ?? {}) }, { status });
-}
-
-async function resolveNextTokenId(): Promise<bigint> {
-  const contractAddress = getTicketContractAddress({ server: true });
-  const client = createPublicClient({ transport: http(RPC_URL) });
-  return (await client.readContract({
-    address: contractAddress,
-    abi: eventTicketAbi,
-    functionName: "nextTokenId",
-    args: [],
-  })) as bigint;
 }
 
 export async function POST(request: Request) {
@@ -318,13 +307,9 @@ export async function POST(request: Request) {
     }
 
     const appUrl = getPublicBaseUrl();
-    let nextTokenId: bigint;
-    try {
-      nextTokenId = await resolveNextTokenId();
-    } catch {
-      return errorResponse("onchain_error", "Failed to read nextTokenId()", 500);
-    }
-    const tokenUri = `${appUrl}/api/metadata/ticket/${eventIdNormalized.toString()}?tokenId=${nextTokenId.toString()}`;
+    const tokenUri = `${appUrl}/api/metadata/ticket/${eventIdNormalized.toString()}?merchantOrderId=${encodeURIComponent(
+      paymentIntentId
+    )}`;
 
     let onchain: Awaited<ReturnType<typeof purchaseOnchain>>;
     try {
@@ -386,6 +371,28 @@ export async function POST(request: Request) {
       });
     }
 
+    let mintedTokenId: string | null = null;
+    try {
+      const publicClient = createPublicClient({ transport: http(RPC_URL) });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: onchain.txHash });
+      mintedTokenId = extractMintedTokenIdFromReceipt({
+        receipt,
+        eventTicketAddress: onchain.nftAddress,
+      });
+    } catch (error) {
+      const err = error as Error;
+      if (lockKey) {
+        await kv.del(lockKey).catch(() => {});
+      }
+      return errorResponse("onchain_error", err.message || "Failed to parse mint receipt", 500);
+    }
+    if (!mintedTokenId) {
+      if (lockKey) {
+        await kv.del(lockKey).catch(() => {});
+      }
+      return errorResponse("onchain_error", "Mint event not found in receipt", 500);
+    }
+
     await recordPaidOrder({
       merchantOrderId: paymentIntentId,
       orderId,
@@ -398,7 +405,7 @@ export async function POST(request: Request) {
       seat: selection.seat,
       paymentPreimage,
       txHash: onchain.txHash,
-      tokenId: onchain.tokenId,
+      tokenId: mintedTokenId,
       nftAddress: onchain.nftAddress,
       custodyAddress: null,
       intentSignature: signature,
@@ -412,7 +419,7 @@ export async function POST(request: Request) {
         merchantOrderId: paymentIntentId,
         orderId,
         txHash: onchain.txHash,
-        tokenId: onchain.tokenId ?? null,
+        tokenId: mintedTokenId ?? null,
       });
     }
     if (lockKey) {

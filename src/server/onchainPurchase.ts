@@ -1,8 +1,8 @@
-import { createPublicClient, createWalletClient, getAddress, http, parseEventLogs, type Hex } from "viem";
+import { createPublicClient, createWalletClient, getAddress, http, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { normalizeSplitSlug } from "@/lib/events";
-import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
+import { getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { requireEnv, validateServerEnv } from "@/src/server/env";
 import { logger } from "@/src/lib/logger";
@@ -31,16 +31,6 @@ function normalizeEventId(eventId: PurchaseArgs["eventId"]): bigint {
   throw new Error("eventId okunamadı");
 }
 
-async function resolveNextTokenId(nftAddress: `0x${string}`): Promise<bigint> {
-  const publicClient = createPublicClient({ transport: http(RPC_URL) });
-  return (await publicClient.readContract({
-    address: nftAddress,
-    abi: eventTicketAbi,
-    functionName: "nextTokenId",
-    args: [],
-  })) as bigint;
-}
-
 export async function purchaseOnchain({
   orderId,
   splitSlug,
@@ -49,7 +39,7 @@ export async function purchaseOnchain({
   uri,
 }: PurchaseArgs): Promise<
   | { alreadyUsed: true }
-  | { alreadyUsed?: false; txHash: Hex; tokenId: string; nftAddress: `0x${string}` }
+  | { alreadyUsed?: false; txHash: Hex; nftAddress: `0x${string}` }
 > {
   const toOnchainError = (stage: "simulate" | "send" | "receipt", error: unknown) => {
     const message = error instanceof Error ? error.message : "Onchain error";
@@ -113,9 +103,10 @@ export async function purchaseOnchain({
   }
 
   const paymentId = orderId;
-  const appUrl = getPublicBaseUrl();
-  const nextTokenId = await resolveNextTokenId(nftAddress);
-  const tokenUri = `${appUrl}/api/metadata/ticket/${normalizedEventId.toString()}?tokenId=${nextTokenId.toString()}`;
+  if (!uri) {
+    throw new Error("Missing token URI");
+  }
+  const tokenUri = uri;
 
   let to: `0x${string}`;
   try {
@@ -158,23 +149,8 @@ export async function purchaseOnchain({
     throw toOnchainError("send", error);
   }
 
-  let receipt;
-  try {
-    receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-  } catch (error) {
-    throw toOnchainError("receipt", error);
-  }
-  const logs = receipt.logs.filter((log) => getAddress(log.address) === nftAddress);
-  const parsed = parseEventLogs({ abi: eventTicketAbi, eventName: "Transfer", logs });
-  const minted = parsed.find((entry) => entry.args.from === "0x0000000000000000000000000000000000000000");
-
-  if (!minted) {
-    throw toOnchainError("receipt", new Error("Mint event not found"));
-  }
-
   return {
     txHash,
-    tokenId: minted.args.tokenId.toString(),
     nftAddress,
   };
 }
