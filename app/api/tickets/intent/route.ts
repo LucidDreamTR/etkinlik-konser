@@ -9,8 +9,7 @@ import { computeOrderId } from "@/src/server/orderId";
 import { createRateLimiter } from "@/src/server/rateLimit";
 import { getTicketContractAddress } from "@/lib/site";
 import { getServerEnv } from "@/src/lib/env";
-import { jsonNoStore } from "@/src/lib/http";
-import { toJsonSafe } from "@/src/lib/json";
+import { jsonSafe } from "@/lib/json";
 import { emitMetric } from "@/src/lib/metrics";
 import { getChainConfig } from "@/src/lib/chain";
 import { logger } from "@/src/lib/logger";
@@ -61,8 +60,15 @@ function normalizeBigInt(value: TicketIntent["eventId"]): bigint {
   throw new Error("Invalid numeric value");
 }
 
+function jsonNoStoreSafe(body: Record<string, unknown>, init?: ResponseInit) {
+  const headers = new Headers(init?.headers ?? undefined);
+  headers.set("Cache-Control", "no-store");
+  headers.set("Pragma", "no-cache");
+  return jsonSafe(body, { ...init, headers });
+}
+
 function errorResponse(reason: string, error: string, status: number, extra?: Record<string, unknown>) {
-  return jsonNoStore({ ok: false, reason, error, ...(extra ?? {}) }, { status });
+  return jsonNoStoreSafe({ ok: false, reason, error, ...(extra ?? {}) }, { status });
 }
 
 export async function POST(request: Request) {
@@ -78,7 +84,7 @@ export async function POST(request: Request) {
         "rate_limit_hit",
         { route, ip: clientIp, reason: "rate_limit", latencyMs: Date.now() - startedAt }
       );
-      return jsonNoStore(
+      return jsonNoStoreSafe(
         { ok: false, reason: "rate_limited", error: "Rate limit exceeded" },
         { status: 429, headers: { "Retry-After": String(retryAfter) } }
       );
@@ -220,7 +226,7 @@ export async function POST(request: Request) {
             latencyMs: Date.now() - startedAt,
           }
         );
-        return jsonNoStore({ ok: true, status: "pending", paymentIntentId, orderId }, { status: 202 });
+        return jsonNoStoreSafe({ ok: true, status: "pending", paymentIntentId, orderId }, { status: 202 });
       }
     }
 
@@ -253,19 +259,15 @@ export async function POST(request: Request) {
     if (lockKey) {
       await kv.del(lockKey).catch(() => {});
     }
-    return jsonNoStore(
-      toJsonSafe({
-        ok: true,
-        status: existing ? "duplicate" : "created",
-        paymentIntentId,
-        merchantOrderId: paymentIntentId,
-        orderId,
-        domain,
-        types: INTENT_TYPES,
-        message,
-        intentToSign: { domain, types: INTENT_TYPES, primaryType: "TicketIntent", message },
-      })
-    );
+    return jsonNoStoreSafe({
+      ok: true,
+      orderId,
+      merchantOrderId: paymentIntentId,
+      domain,
+      types: INTENT_TYPES,
+      message,
+      intentToSign: { domain, types: INTENT_TYPES, primaryType: "TicketIntent", message },
+    });
   } catch (error) {
     logger.error("intent.error", { error });
     const message = error instanceof Error ? error.message : String(error);
