@@ -233,7 +233,7 @@ export default function MetaMaskPurchase({
           </button>
 
           <button
-            className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:bg-white/85 disabled:opacity-100"
+            className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black/80 disabled:cursor-not-allowed disabled:bg-white/90 disabled:opacity-100 disabled:shadow-none disabled:ring-1 disabled:ring-white/15"
             onClick={purchase}
             disabled={isBusy || !account}
           >

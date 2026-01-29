@@ -11,7 +11,7 @@ export function LoadingShimmerText({ text, className }: LoadingShimmerTextProps)
       <span className="relative z-10">{text}</span>
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 z-20 animate-shimmer-sweep shimmer-overlay"
+        className="pointer-events-none absolute left-0 right-0 top-[2px] bottom-[2px] z-20 rounded-full animate-shimmer-sweep shimmer-overlay"
       />
     </span>
   );
