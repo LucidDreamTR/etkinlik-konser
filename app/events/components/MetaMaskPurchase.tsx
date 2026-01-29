@@ -139,6 +139,14 @@ export default function MetaMaskPurchase({
       return;
     }
 
+    console.log("[metamask] requestAddresses start");
+    try {
+      await client.requestAddresses();
+    } catch {
+      await ethereum.request({ method: "eth_requestAccounts" });
+    }
+    console.log("[metamask] requestAddresses done");
+
     const signature = await client.signTypedData({
       account,
       domain: {
