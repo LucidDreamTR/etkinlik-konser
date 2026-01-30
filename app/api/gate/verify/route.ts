@@ -4,7 +4,8 @@ import { kv } from "@vercel/kv";
 
 import { getTicketContractAddress } from "@/lib/site";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
-import { getOrderByTokenId, markOrderClaimed, markTokenUsedOnce, persistOrder } from "@/src/lib/ordersStore";
+import { getOrderByMerchantId, getOrderByTokenId, markOrderClaimed, markTokenUsedOnce, persistOrder } from "@/src/lib/ordersStore";
+import { hashClaimCode, isFormattedClaimCode, normalizeFormattedClaimCode } from "@/src/lib/claimCode";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { shouldIncludeGateDebug } from "@/src/server/debugFlags";
 import { createRateLimiter } from "@/src/server/rateLimit";
@@ -32,6 +33,7 @@ const hasKv = Boolean(env.KV_REST_API_URL && env.KV_REST_API_TOKEN);
 type VerifyPayload = {
   tokenId?: string | number;
   code?: string;
+  merchantOrderId?: string;
 };
 
 type VerifyErrorReason =
@@ -39,6 +41,7 @@ type VerifyErrorReason =
   | "invalid_json"
   | "invalid_token"
   | "missing_code"
+  | "order_not_found"
   | "temporarily_locked"
   | "onchain_error"
   | "not_claimed"
@@ -134,6 +137,12 @@ function parseTokenId(value: unknown): bigint | null {
 }
 
 function normalizeCode(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeMerchantOrderId(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
@@ -384,28 +393,6 @@ export async function POST(request: Request) {
       });
     }
 
-    if (!claimed) {
-      logGateFailure("not_claimed", tokenIdString, eventId, ipHash);
-      emitMetric("gate_invalid", {
-        route,
-        tokenId: tokenIdString,
-        ip,
-        reason: "not_claimed",
-        latencyMs: Date.now() - startedAt,
-      });
-      return respondFailure({
-        ok: true,
-        reason: "not_claimed",
-        status: 200,
-        tokenId: tokenIdString,
-        eventId,
-        owner,
-        claimed,
-        details: "Ticket not claimed",
-        debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
-      });
-    }
-
     if (!paymentIdOnchain || paymentIdOnchain === ZERO_BYTES32) {
       logGateFailure("payment_missing", tokenIdString, eventId, ipHash);
       emitMetric("gate_invalid", {
@@ -427,13 +414,82 @@ export async function POST(request: Request) {
         debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
       });
     }
+    const merchantOrderId = normalizeMerchantOrderId(payload?.merchantOrderId);
+    const orderByToken = await getOrderByTokenId(tokenIdString);
+    const orderByMerchant = !orderByToken && merchantOrderId ? await getOrderByMerchantId(merchantOrderId) : undefined;
+    let order = orderByToken ?? orderByMerchant;
+    if (!order) {
+      logGateFailure("order_not_found", tokenIdString, eventId, ipHash);
+      emitMetric(
+        "gate_invalid",
+        { route, tokenId: tokenIdString, ip, reason: "order_not_found", latencyMs: Date.now() - startedAt }
+      );
+      return respondFailure({
+        ok: true,
+        reason: "order_not_found",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId,
+        owner,
+        claimed,
+        details: "Order not found for token",
+        debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
+      });
+    }
 
+    order = ensureTicketState(order);
     const trimmedCode = code.trim();
+    let codeMatches = false;
+    if (order.claimCode) {
+      const requestUpper = trimmedCode.toUpperCase();
+      const storedUpper = order.claimCode.toUpperCase();
+      if (isFormattedClaimCode(requestUpper) && isFormattedClaimCode(storedUpper)) {
+        const normalizedRequest = normalizeFormattedClaimCode(requestUpper);
+        const normalizedStored = normalizeFormattedClaimCode(storedUpper);
+        const computedBuffer = Buffer.from(normalizedRequest, "utf8");
+        const storedBuffer = Buffer.from(normalizedStored, "utf8");
+        codeMatches =
+          computedBuffer.length === storedBuffer.length && crypto.timingSafeEqual(computedBuffer, storedBuffer);
+      } else {
+        const computedBuffer = Buffer.from(trimmedCode, "utf8");
+        const storedBuffer = Buffer.from(order.claimCode, "utf8");
+        codeMatches =
+          computedBuffer.length === storedBuffer.length && crypto.timingSafeEqual(computedBuffer, storedBuffer);
+      }
+    } else if (order.claimCodeHash) {
+      const computed = hashClaimCode(trimmedCode);
+      const computedBuffer = Buffer.from(computed, "utf8");
+      const storedBuffer = Buffer.from(order.claimCodeHash, "utf8");
+      codeMatches =
+        computedBuffer.length === storedBuffer.length && crypto.timingSafeEqual(computedBuffer, storedBuffer);
+    }
+
     const expectedHash = isBytes32Hex(trimmedCode)
       ? trimmedCode.toLowerCase()
       : hashPaymentPreimage(trimmedCode).toLowerCase();
     const normalizedOnchain = paymentIdOnchain.toLowerCase();
-    if (expectedHash !== normalizedOnchain) {
+    const paymentMatches = expectedHash === normalizedOnchain;
+
+    if ((order.claimCode || order.claimCodeHash) && !codeMatches) {
+      logGateFailure("invalid_code", tokenIdString, eventId, ipHash);
+      emitMetric(
+        "gate_invalid",
+        { route, tokenId: tokenIdString, ip, reason: "invalid_code", latencyMs: Date.now() - startedAt }
+      );
+      return respondFailure({
+        ok: true,
+        reason: "invalid_code",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId,
+        owner,
+        claimed,
+        details: "Invalid claim code",
+        debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
+      });
+    }
+
+    if (!order.claimCode && !order.claimCodeHash && !paymentMatches) {
       logGateFailure("payment_mismatch", tokenIdString, eventId, ipHash);
       if (hasKv) {
         const invalidKey = `gate:verify:invalid:${tokenIdString}`;
@@ -464,32 +520,53 @@ export async function POST(request: Request) {
       });
     }
 
-    const orderRaw = await getOrderByTokenId(tokenIdString);
-    const order = orderRaw ? ensureTicketState(orderRaw) : undefined;
-    const claimedToStored: string | null = order?.claimedTo ?? null;
+    if (!claimed) {
+      let buyerAddress: string | null = null;
+      if (order.buyerAddress) {
+        try {
+          buyerAddress = getAddress(order.buyerAddress);
+        } catch {
+          buyerAddress = null;
+        }
+      }
+      if (buyerAddress && owner && buyerAddress === owner) {
+        const now = new Date().toISOString();
+        const updated = applyAtLeastTransition(order, "claimed", {
+          claimStatus: "claimed",
+          claimedTo: order.claimedTo ?? owner,
+          claimedAt: order.claimedAt ?? now,
+          claimCode: order.claimCode ?? (order.claimCodeHash ? null : trimmedCode),
+          claimCodeHash: order.claimCodeHash ?? hashClaimCode(trimmedCode),
+          claimCodeCreatedAt: order.claimCodeCreatedAt ?? now,
+        });
+        await persistOrder(updated);
+        order = updated;
+      } else {
+        logGateFailure("not_claimed", tokenIdString, eventId, ipHash);
+        emitMetric("gate_invalid", {
+          route,
+          tokenId: tokenIdString,
+          ip,
+          reason: "not_claimed",
+          latencyMs: Date.now() - startedAt,
+        });
+        return respondFailure({
+          ok: true,
+          reason: "not_claimed",
+          status: 200,
+          tokenId: tokenIdString,
+          eventId,
+          owner,
+          claimed,
+          details: "Ticket not claimed",
+          debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
+        });
+      }
+    }
+
+    const claimedToStored: string | null = order.claimedTo ?? null;
     const claimedToOnchain: string | null = owner ?? null;
     let claimedToMismatchHealed = false;
-    if (!order) {
-      logGateFailure("not_claimed", tokenIdString, eventId, ipHash);
-      emitMetric("gate_invalid", {
-        route,
-        tokenId: tokenIdString,
-        ip,
-        reason: "not_claimed",
-        latencyMs: Date.now() - startedAt,
-      });
-      return respondFailure({
-        ok: true,
-        reason: "not_claimed",
-        status: 200,
-        tokenId: tokenIdString,
-        eventId,
-        owner,
-        claimed,
-        details: "Order not found for token",
-        debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
-      });
-    }
 
     if (order.ticketState === "gate_validated") {
       logGateFailure("already_used", tokenIdString, eventId, ipHash);

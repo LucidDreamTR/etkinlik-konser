@@ -51,3 +51,10 @@ const autoClaimed = applyAtLeastTransition(directMint, "claimed", { claimStatus:
 assert.equal(autoClaimed.ticketState, "claimed", "minted -> claimed should be allowed for direct mint");
 const autoClaimedAgain = applyAtLeastTransition(autoClaimed, "claimed", { claimStatus: "claimed" });
 assert.equal(autoClaimedAgain.ticketState, "claimed", "auto-claim should be idempotent");
+
+const gateValidated = applyTransition(autoClaimed, "gate_validated", { gateValidatedAt: new Date().toISOString() });
+assert.equal(gateValidated.ticketState, "gate_validated", "gate verify should advance to gate_validated");
+const gateValidatedAgain = applyAtLeastTransition(gateValidated, "gate_validated", {
+  gateValidatedAt: gateValidated.gateValidatedAt,
+});
+assert.equal(gateValidatedAgain.ticketState, "gate_validated", "gate verify should be idempotent");
