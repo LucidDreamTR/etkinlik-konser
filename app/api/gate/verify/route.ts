@@ -343,7 +343,7 @@ export async function POST(request: Request) {
     const client = createPublicClient({ transport: http(RPC_URL) });
 
     let owner: string | null = null;
-    let claimed = false;
+    let onchainClaimed = false;
     let eventId: string | null = null;
     let paymentIdOnchain: string | null = null;
 
@@ -371,7 +371,7 @@ export async function POST(request: Request) {
 
       owner = getAddress(ownerRaw);
       eventId = ticketMeta[0].toString();
-      claimed = Boolean(ticketMeta[1]);
+      onchainClaimed = Boolean(ticketMeta[1]);
       paymentIdOnchain = paymentId.toLowerCase();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
@@ -409,7 +409,7 @@ export async function POST(request: Request) {
         tokenId: tokenIdString,
         eventId,
         owner,
-        claimed,
+        claimed: onchainClaimed,
         details: "Missing paymentId onchain",
         debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
       });
@@ -431,7 +431,7 @@ export async function POST(request: Request) {
         tokenId: tokenIdString,
         eventId,
         owner,
-        claimed,
+        claimed: onchainClaimed,
         details: "Order not found for token",
         debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
       });
@@ -483,7 +483,7 @@ export async function POST(request: Request) {
         tokenId: tokenIdString,
         eventId,
         owner,
-        claimed,
+        claimed: onchainClaimed,
         details: "Invalid claim code",
         debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
       });
@@ -514,13 +514,13 @@ export async function POST(request: Request) {
         tokenId: tokenIdString,
         eventId,
         owner,
-        claimed,
+        claimed: onchainClaimed,
         details: "Payment hash does not match",
         debugExtras: debugEnabled ? { paymentIdOnchain, expectedHash } : undefined,
       });
     }
 
-    if (!claimed) {
+    if (!onchainClaimed) {
       let buyerAddress: string | null = null;
       if (order.buyerAddress) {
         try {
@@ -557,7 +557,7 @@ export async function POST(request: Request) {
           tokenId: tokenIdString,
           eventId,
           owner,
-          claimed,
+          claimed: false,
           details: "Ticket not claimed",
           debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
         });
@@ -585,6 +585,8 @@ export async function POST(request: Request) {
       }
     }
 
+    const responseClaimed =
+      order.claimStatus === "claimed" || order.ticketState === "claimed" || order.ticketState === "gate_validated";
     const claimedToStored: string | null = order.claimedTo ?? null;
     const claimedToOnchain: string | null = owner ?? null;
     let claimedToMismatchHealed = false;
@@ -602,7 +604,7 @@ export async function POST(request: Request) {
         tokenId: tokenIdString,
         eventId,
         owner,
-        claimed,
+        claimed: responseClaimed,
         details: "Ticket already used",
         debugExtras: debugEnabled ? { claimedToStored, claimedToOnchain, claimedToMismatchHealed } : undefined,
       });
@@ -624,7 +626,7 @@ export async function POST(request: Request) {
         tokenId: tokenIdString,
         eventId,
         owner,
-        claimed,
+        claimed: responseClaimed,
         details: "Ticket not in claimed state",
         debugExtras: debugEnabled ? { claimedToStored, claimedToOnchain, claimedToMismatchHealed } : undefined,
       });
@@ -634,7 +636,7 @@ export async function POST(request: Request) {
       try {
         const claimedTo = getAddress(order.claimedTo);
         if (claimedTo !== owner) {
-          if (claimed === true && order.merchantOrderId && order.txHash) {
+          if (onchainClaimed === true && order.merchantOrderId && order.txHash) {
             try {
               await markOrderClaimed({
                 merchantOrderId: order.merchantOrderId,
@@ -665,7 +667,7 @@ export async function POST(request: Request) {
               tokenId: tokenIdString,
               eventId,
               owner,
-              claimed,
+              claimed: responseClaimed,
               details: "Owner does not match claimed address",
               debugExtras: debugEnabled
                 ? { claimedToStored: order.claimedTo, claimedToOnchain: owner, claimedToMismatchHealed: false }
@@ -704,7 +706,7 @@ export async function POST(request: Request) {
         tokenId: tokenIdString,
         eventId,
         owner,
-        claimed,
+        claimed: true,
         details: "Ticket already used",
         debugExtras: debugEnabled
           ? { claimedToStored, claimedToOnchain, claimedToMismatchHealed }
@@ -736,7 +738,7 @@ export async function POST(request: Request) {
       tokenId: tokenIdString,
       owner,
       ...(debugEnabled ? { eventId } : {}),
-      claimed,
+      claimed: true,
       ...(debugEnabled
         ? { paymentIdOnchain, expectedHash, claimedToStored, claimedToOnchain, claimedToMismatchHealed }
         : {}),

@@ -66,6 +66,8 @@ const gateValidated = applyTransition(autoClaimed, "gate_validated", {
 });
 assert.equal(gateValidated.ticketState, "gate_validated", "gate verify should advance to gate_validated");
 assert.equal(gateValidated.claimStatus, "claimed", "gate verify should keep claimStatus claimed");
+const responseClaimed = gateValidated.claimStatus === "claimed" || gateValidated.ticketState === "gate_validated";
+assert.equal(responseClaimed, true, "gate verify response should report claimed true");
 const gateValidatedAgain = applyAtLeastTransition(gateValidated, "gate_validated", {
   gateValidatedAt: gateValidated.gateValidatedAt,
 });
