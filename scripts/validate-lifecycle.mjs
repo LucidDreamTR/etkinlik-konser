@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import { applyAtLeastTransition, applyTransition, canTransition } from "../src/lib/ticketLifecycle.ts";
+import { generateClaimCode, isFormattedClaimCode } from "../src/lib/claimCode.ts";
 
 function assertThrows(fn, message) {
   let threw = false;
@@ -32,3 +33,14 @@ const after = applyAtLeastTransition(before, "minted", { purchaseStatus: "duplic
 assert.equal(after.ticketState, "minted", "duplicate purchase should not change state");
 
 console.log("ticket lifecycle validation passed");
+
+// claimCode generator smoke test (local-only)
+const seen = new Set();
+for (let i = 0; i < 10_000; i += 1) {
+  const code = generateClaimCode();
+  assert.equal(isFormattedClaimCode(code), true, "claimCode format invalid");
+  assert.equal(seen.has(code), false, "claimCode collision detected");
+  seen.add(code);
+}
+
+console.log("claimCode generator validation passed");

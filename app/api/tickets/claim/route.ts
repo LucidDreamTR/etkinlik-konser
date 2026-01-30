@@ -3,6 +3,7 @@ import { createPublicClient, createWalletClient, getAddress, http, isAddress } f
 import { privateKeyToAccount } from "viem/accounts";
 import { kv } from "@vercel/kv";
 
+import { hashClaimCode, isFormattedClaimCode, normalizeFormattedClaimCode } from "@/src/lib/claimCode";
 import { getOrderByMerchantId, markOrderClaimed } from "@/src/lib/ordersStore";
 import { ensureTicketState } from "@/src/lib/ticketLifecycle";
 import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
@@ -35,10 +36,6 @@ function getClientIp(headers: Headers): string {
   const forwarded = headers.get("x-forwarded-for");
   if (forwarded) return forwarded.split(",")[0]?.trim() || "unknown";
   return headers.get("x-real-ip") || "unknown";
-}
-
-function hashClaimCode(claimCode: string): string {
-  return crypto.createHash("sha256").update(claimCode).digest("hex");
 }
 
 function hashIp(ip: string): string {
@@ -180,7 +177,7 @@ export async function POST(request: Request) {
     logClaimFail("not_ready", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     return jsonNoStore({ ok: false, reason: "not_ready", error: "Order not ready for claim" }, { status: 400 });
   }
-  if (!order.custodyAddress || !order.claimCodeHash) {
+  if (!order.custodyAddress || (!order.claimCode && !order.claimCodeHash)) {
     return jsonNoStore(
       { ok: true, status: "not_required", message: "Ticket already minted to buyer; no claim needed" },
       { status: 200 }
@@ -213,10 +210,34 @@ export async function POST(request: Request) {
     );
   }
 
-  const computed = hashClaimCode(payload.claimCode);
-  const computedBuffer = Buffer.from(computed, "utf8");
-  const storedBuffer = Buffer.from(order.claimCodeHash, "utf8");
-  if (computedBuffer.length !== storedBuffer.length || !crypto.timingSafeEqual(computedBuffer, storedBuffer)) {
+  let claimCodeMatches = false;
+  if (order.claimCode) {
+    const requestCode = payload.claimCode.trim();
+    const orderCode = order.claimCode;
+    const requestUpper = requestCode.toUpperCase();
+    const orderUpper = orderCode.toUpperCase();
+    if (isFormattedClaimCode(requestUpper) && isFormattedClaimCode(orderUpper)) {
+      const normalizedRequest = normalizeFormattedClaimCode(requestUpper);
+      const normalizedOrder = normalizeFormattedClaimCode(orderUpper);
+      const computedBuffer = Buffer.from(normalizedRequest, "utf8");
+      const storedBuffer = Buffer.from(normalizedOrder, "utf8");
+      claimCodeMatches =
+        computedBuffer.length === storedBuffer.length && crypto.timingSafeEqual(computedBuffer, storedBuffer);
+    } else {
+      const computedBuffer = Buffer.from(requestCode, "utf8");
+      const storedBuffer = Buffer.from(orderCode, "utf8");
+      claimCodeMatches =
+        computedBuffer.length === storedBuffer.length && crypto.timingSafeEqual(computedBuffer, storedBuffer);
+    }
+  } else if (order.claimCodeHash) {
+    const computed = hashClaimCode(payload.claimCode);
+    const computedBuffer = Buffer.from(computed, "utf8");
+    const storedBuffer = Buffer.from(order.claimCodeHash, "utf8");
+    claimCodeMatches =
+      computedBuffer.length === storedBuffer.length && crypto.timingSafeEqual(computedBuffer, storedBuffer);
+  }
+
+  if (!claimCodeMatches) {
     logClaimFail("invalid_code", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     emitMetric(
       "claim_already",

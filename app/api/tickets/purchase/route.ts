@@ -3,10 +3,11 @@ import { createPublicClient, encodePacked, getAddress, http, recoverTypedDataAdd
 
 import { getPublicBaseUrl, getTicketContractAddress } from "@/lib/site";
 import { getTicketTypeConfig } from "@/data/ticketMetadata";
-import { getOrderByMerchantId, persistOrder, recordPaidOrder } from "@/src/lib/ordersStore";
+import { getOrderByMerchantId, persistOrder, recordPaidOrder, type PaymentOrder } from "@/src/lib/ordersStore";
 import { applyAtLeastTransition } from "@/src/lib/ticketLifecycle";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { purchaseOnchain } from "@/src/server/onchainPurchase";
+import { generateClaimCode, hashClaimCode } from "@/src/lib/claimCode";
 import { getServerEnv } from "@/src/lib/env";
 import { jsonNoStore } from "@/src/lib/http";
 import { emitMetric } from "@/src/lib/metrics";
@@ -91,6 +92,41 @@ function resolveTicketSelection(eventIdNumber: number, ticketTypeRaw: string | n
 
 function errorResponse(reason: string, error: string, status: number, extra?: Record<string, unknown>) {
   return jsonNoStore({ ok: false, reason, error, ...(extra ?? {}) }, { status });
+}
+
+function resolveClaimCode(existing?: PaymentOrder | null): {
+  claimCode: string;
+  claimCodeCreatedAt: string;
+  claimCodeHash: string;
+} {
+  if (existing?.claimCode) {
+    return {
+      claimCode: existing.claimCode,
+      claimCodeCreatedAt: existing.claimCodeCreatedAt ?? new Date().toISOString(),
+      claimCodeHash: existing.claimCodeHash ?? hashClaimCode(existing.claimCode),
+    };
+  }
+  const claimCode = generateClaimCode();
+  return {
+    claimCode,
+    claimCodeCreatedAt: new Date().toISOString(),
+    claimCodeHash: hashClaimCode(claimCode),
+  };
+}
+
+async function persistClaimCode(existing: PaymentOrder, details: ReturnType<typeof resolveClaimCode>) {
+  const needsUpdate =
+    existing.claimCode !== details.claimCode ||
+    existing.claimCodeHash !== details.claimCodeHash ||
+    existing.claimCodeCreatedAt !== details.claimCodeCreatedAt;
+  if (!needsUpdate) return existing;
+  const updated = applyAtLeastTransition(existing, existing.ticketState ?? "intent_created", {
+    claimCode: details.claimCode,
+    claimCodeHash: details.claimCodeHash,
+    claimCodeCreatedAt: details.claimCodeCreatedAt,
+  });
+  await persistOrder(updated);
+  return updated;
 }
 
 export async function POST(request: Request) {
@@ -246,6 +282,8 @@ export async function POST(request: Request) {
 
     const existing = await getOrderByMerchantId(paymentIntentId);
     if (existing?.txHash) {
+      const claimDetails = resolveClaimCode(existing);
+      await persistClaimCode(existing, claimDetails);
       if (debugEnabled) {
         logger.info("purchase.duplicate", {
           merchantOrderId: paymentIntentId,
@@ -264,6 +302,7 @@ export async function POST(request: Request) {
         txHash: existing.txHash,
         paymentIntentId,
         orderId,
+        claimCode: claimDetails.claimCode,
         ...(debugEnabled ? { existingHadTxHash: true, lockHit: false } : {}),
       });
     }
@@ -301,6 +340,7 @@ export async function POST(request: Request) {
           status: "pending",
           paymentIntentId,
           orderId,
+          ...(existing?.claimCode ? { claimCode: existing.claimCode } : {}),
           ...(debugEnabled ? { existingHadTxHash: false, lockHit: true } : {}),
         });
       }
@@ -338,6 +378,7 @@ export async function POST(request: Request) {
           status: "duplicate",
           paymentIntentId,
           orderId,
+          ...(existing?.claimCode ? { claimCode: existing.claimCode } : {}),
           ...(debugEnabled ? { onchainError: "duplicate" } : {}),
         });
       }
@@ -367,6 +408,7 @@ export async function POST(request: Request) {
         status: "duplicate",
         paymentIntentId,
         orderId,
+        ...(existing?.claimCode ? { claimCode: existing.claimCode } : {}),
         ...(debugEnabled ? { existingHadTxHash: false, lockHit: false } : {}),
       });
     }
@@ -393,6 +435,7 @@ export async function POST(request: Request) {
       return errorResponse("onchain_error", "Mint event not found in receipt", 500);
     }
 
+    const claimDetails = resolveClaimCode(existing);
     await recordPaidOrder({
       merchantOrderId: paymentIntentId,
       orderId,
@@ -411,7 +454,9 @@ export async function POST(request: Request) {
       intentSignature: signature,
       intentDeadline: intent.deadline.toString(),
       intentAmountWei: intent.amountWei.toString(),
-      claimCodeHash: null,
+      claimCode: claimDetails.claimCode,
+      claimCodeCreatedAt: claimDetails.claimCodeCreatedAt,
+      claimCodeHash: claimDetails.claimCodeHash,
     });
 
     if (debugEnabled) {
@@ -435,6 +480,7 @@ export async function POST(request: Request) {
       txHash: onchain.txHash,
       paymentIntentId,
       orderId,
+      claimCode: claimDetails.claimCode,
       ...(debugEnabled ? { existingHadTxHash: false, lockHit: false } : {}),
     });
   } catch (error) {

@@ -36,6 +36,8 @@ export type PaymentOrder = {
   nftAddress?: string | null;
   custodyAddress?: string | null;
   claimCodeHash?: string | null;
+  claimCode?: string | null;
+  claimCodeCreatedAt?: string | null;
   claimExpiresAt?: string | null;
   claimStatus?: ClaimStatus | null;
   claimedTo?: string | null;
@@ -214,6 +216,8 @@ export async function recordPaidOrder(
         nftAddress: order.nftAddress ?? existing.nftAddress ?? null,
         custodyAddress: order.custodyAddress ?? existing.custodyAddress ?? null,
         claimCodeHash: order.claimCodeHash ?? existing.claimCodeHash ?? null,
+        claimCode: order.claimCode ?? existing.claimCode ?? null,
+        claimCodeCreatedAt: order.claimCodeCreatedAt ?? existing.claimCodeCreatedAt ?? null,
         claimExpiresAt: order.claimExpiresAt ?? existing.claimExpiresAt ?? null,
         claimStatus: order.claimStatus ?? existing.claimStatus ?? null,
         claimedTo: order.claimedTo ?? existing.claimedTo ?? null,
@@ -257,6 +261,8 @@ export async function recordOrderStatus(
       | "nftAddress"
       | "custodyAddress"
       | "claimCodeHash"
+      | "claimCode"
+      | "claimCodeCreatedAt"
       | "claimExpiresAt"
       | "claimStatus"
       | "claimedTo"
@@ -280,6 +286,8 @@ export async function recordOrderStatus(
       nftAddress: null,
       custodyAddress: null,
       claimCodeHash: null,
+      claimCode: null,
+      claimCodeCreatedAt: null,
       claimExpiresAt: null,
       claimStatus: "unclaimed",
       claimedTo: null,
