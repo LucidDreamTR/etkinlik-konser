@@ -564,6 +564,27 @@ export async function POST(request: Request) {
       }
     }
 
+    if (order.ticketState === "claimed" && order.claimStatus !== "claimed") {
+      let buyerAddress: string | null = null;
+      if (order.buyerAddress) {
+        try {
+          buyerAddress = getAddress(order.buyerAddress);
+        } catch {
+          buyerAddress = null;
+        }
+      }
+      if (buyerAddress && owner && buyerAddress === owner) {
+        const now = new Date().toISOString();
+        const updated = applyAtLeastTransition(order, "claimed", {
+          claimStatus: "claimed",
+          claimedTo: order.claimedTo ?? owner,
+          claimedAt: order.claimedAt ?? now,
+        });
+        await persistOrder(updated);
+        order = updated;
+      }
+    }
+
     const claimedToStored: string | null = order.claimedTo ?? null;
     const claimedToOnchain: string | null = owner ?? null;
     let claimedToMismatchHealed = false;
@@ -666,6 +687,9 @@ export async function POST(request: Request) {
       const updated = applyAtLeastTransition(order, "gate_validated", {
         usedAt: useResult.usedAt,
         gateValidatedAt: useResult.usedAt,
+        claimStatus: order.claimStatus ?? "claimed",
+        claimedTo: order.claimedTo ?? owner ?? null,
+        claimedAt: order.claimedAt ?? useResult.usedAt,
       });
       await persistOrder(updated);
       logGateFailure("already_used", tokenIdString, eventId, ipHash);
@@ -692,6 +716,9 @@ export async function POST(request: Request) {
       usedAt: useResult.usedAt,
       gateValidatedAt: useResult.usedAt,
       eventId: order.eventId || eventId,
+      claimStatus: order.claimStatus ?? "claimed",
+      claimedTo: order.claimedTo ?? owner ?? null,
+      claimedAt: order.claimedAt ?? useResult.usedAt,
     });
     await persistOrder(updatedOrder);
 

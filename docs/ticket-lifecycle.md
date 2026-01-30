@@ -40,6 +40,7 @@ Same-state transitions are always permitted for idempotency.
   - success → `gate_validated` and write used marker.
   - already used → no state change.
   - when a ticket is minted directly to the buyer, a valid gate scan can auto-claim the order before validation.
+  - on a valid scan, order is persisted as `gate_validated` with `claimStatus="claimed"`.
 
 ## Idempotency rules
 - Repeated calls must not regress state.

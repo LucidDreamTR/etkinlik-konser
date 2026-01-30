@@ -49,11 +49,16 @@ console.log("claimCode generator validation passed");
 const directMint = applyTransition({ ticketState: "intent_created" }, "minted");
 const autoClaimed = applyAtLeastTransition(directMint, "claimed", { claimStatus: "claimed" });
 assert.equal(autoClaimed.ticketState, "claimed", "minted -> claimed should be allowed for direct mint");
+assert.equal(autoClaimed.claimStatus, "claimed", "auto-claim should set claimStatus");
 const autoClaimedAgain = applyAtLeastTransition(autoClaimed, "claimed", { claimStatus: "claimed" });
 assert.equal(autoClaimedAgain.ticketState, "claimed", "auto-claim should be idempotent");
 
-const gateValidated = applyTransition(autoClaimed, "gate_validated", { gateValidatedAt: new Date().toISOString() });
+const gateValidated = applyTransition(autoClaimed, "gate_validated", {
+  gateValidatedAt: new Date().toISOString(),
+  claimStatus: autoClaimed.claimStatus ?? "claimed",
+});
 assert.equal(gateValidated.ticketState, "gate_validated", "gate verify should advance to gate_validated");
+assert.equal(gateValidated.claimStatus, "claimed", "gate verify should keep claimStatus claimed");
 const gateValidatedAgain = applyAtLeastTransition(gateValidated, "gate_validated", {
   gateValidatedAt: gateValidated.gateValidatedAt,
 });
