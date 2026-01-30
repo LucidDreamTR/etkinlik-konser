@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 
-import { applyAtLeastTransition, applyTransition, canTransition } from "../src/lib/ticketLifecycle.ts";
-import { generateClaimCode, isFormattedClaimCode } from "../src/lib/claimCode.ts";
+import "ts-node/register";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const ticketLifecycleModule = require("../src/lib/ticketLifecycle.ts");
+const claimCodeModule = require("../src/lib/claimCode.ts");
+
+const { applyAtLeastTransition, applyTransition, canTransition } = ticketLifecycleModule;
+const { generateClaimCode, isFormattedClaimCode } = claimCodeModule;
 
 function assertThrows(fn, message) {
   let threw = false;
