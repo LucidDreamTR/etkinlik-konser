@@ -129,6 +129,20 @@ async function persistClaimCode(existing: PaymentOrder, details: ReturnType<type
   return updated;
 }
 
+async function maybeMarkClaimed(order: PaymentOrder, buyerAddress: string) {
+  if (order.custodyAddress) return order;
+  const updated = applyAtLeastTransition(order, "claimed", {
+    claimStatus: "claimed",
+    claimedTo: order.claimedTo ?? buyerAddress,
+    claimedAt: order.claimedAt ?? new Date().toISOString(),
+  });
+  if (updated.ticketState === order.ticketState && updated.claimedAt === order.claimedAt) {
+    return order;
+  }
+  await persistOrder(updated);
+  return updated;
+}
+
 export async function POST(request: Request) {
   const route = "/api/tickets/purchase";
   const clientIp = getClientIp(request.headers);
@@ -283,7 +297,10 @@ export async function POST(request: Request) {
     const existing = await getOrderByMerchantId(paymentIntentId);
     if (existing?.txHash) {
       const claimDetails = resolveClaimCode(existing);
-      await persistClaimCode(existing, claimDetails);
+      const persisted = await persistClaimCode(existing, claimDetails);
+      if (persisted.buyerAddress) {
+        await maybeMarkClaimed(persisted, persisted.buyerAddress);
+      }
       if (debugEnabled) {
         logger.info("purchase.duplicate", {
           merchantOrderId: paymentIntentId,
@@ -436,7 +453,7 @@ export async function POST(request: Request) {
     }
 
     const claimDetails = resolveClaimCode(existing);
-    await recordPaidOrder({
+    const paidResult = await recordPaidOrder({
       merchantOrderId: paymentIntentId,
       orderId,
       orderNonce,
@@ -458,6 +475,10 @@ export async function POST(request: Request) {
       claimCodeCreatedAt: claimDetails.claimCodeCreatedAt,
       claimCodeHash: claimDetails.claimCodeHash,
     });
+
+    if (paidResult.order.buyerAddress) {
+      await maybeMarkClaimed(paidResult.order, paidResult.order.buyerAddress);
+    }
 
     if (debugEnabled) {
       logger.info("purchase.processed", {

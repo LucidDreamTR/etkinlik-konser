@@ -26,6 +26,7 @@ Same-state transitions are always permitted for idempotency.
 - `/api/tickets/intent`: creates/updates order as `intent_created` (never downgrades).
 - `/api/tickets/purchase`:
   - success with txHash → `minted` (and implicitly `paid`).
+  - if minted directly to the buyer, lifecycle transitions to `claimed` automatically.
   - success responses include `claimCode` for subsequent `/api/tickets/claim`.
   - pending → no state change, `purchaseStatus="pending"`.
   - duplicate → no state change.

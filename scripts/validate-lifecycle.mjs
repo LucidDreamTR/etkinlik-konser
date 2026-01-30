@@ -44,3 +44,10 @@ for (let i = 0; i < 10_000; i += 1) {
 }
 
 console.log("claimCode generator validation passed");
+
+// direct mint to buyer should be treated as claimed (idempotent)
+const directMint = applyTransition({ ticketState: "intent_created" }, "minted");
+const autoClaimed = applyAtLeastTransition(directMint, "claimed", { claimStatus: "claimed" });
+assert.equal(autoClaimed.ticketState, "claimed", "minted -> claimed should be allowed for direct mint");
+const autoClaimedAgain = applyAtLeastTransition(autoClaimed, "claimed", { claimStatus: "claimed" });
+assert.equal(autoClaimedAgain.ticketState, "claimed", "auto-claim should be idempotent");
