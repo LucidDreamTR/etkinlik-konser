@@ -1,12 +1,11 @@
 import crypto from "crypto";
-import { createPublicClient, createWalletClient, getAddress, http, isAddress } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { Contract, JsonRpcProvider, Wallet } from "ethers";
+import { getAddress, isAddress } from "viem";
 import { kv } from "@vercel/kv";
 
 import { hashClaimCode, isFormattedClaimCode, normalizeFormattedClaimCode } from "@/src/lib/claimCode";
 import { getOrderByMerchantId, markOrderClaimed, persistOrder } from "@/src/lib/ordersStore";
 import { applyAtLeastTransition, ensureTicketState } from "@/src/lib/ticketLifecycle";
-import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { createRateLimiter } from "@/src/server/rateLimit";
 import { getServerEnv } from "@/src/lib/env";
 import { jsonNoStore } from "@/src/lib/http";
@@ -15,6 +14,7 @@ import { getChainConfig } from "@/src/lib/chain";
 import { logger } from "@/src/lib/logger";
 import { isProdDebugEnabled } from "@/src/lib/debug";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
+import { resolveMintModeFromOrder } from "@/src/lib/mintMode";
 
 const env = getServerEnv();
 const chain = getChainConfig();
@@ -27,6 +27,7 @@ const CLAIM_LOCK_TTL_SECONDS = 120;
 const hasKv = Boolean(env.KV_REST_API_URL && env.KV_REST_API_TOKEN);
 
 type ClaimPayload = {
+  tokenId?: string;
   merchantOrderId?: string;
   claimCode?: string;
   walletAddress?: string;
@@ -58,15 +59,10 @@ type ClaimErrorReason =
   | "server_misconfigured"
   | "claim_failed";
 
-function resolveMintMode(order: { mintMode?: string | null; custodyAddress?: string | null }): "direct" | "custody" {
-  if (order.mintMode === "custody") return "custody";
-  if (order.mintMode === "direct") return "direct";
-  return order.custodyAddress ? "custody" : "direct";
-}
-
 function logClaimFail(
   reason: ClaimErrorReason,
-  context: { tokenId: string | null; eventId: string | null; ipHash: string }
+  context: { tokenId: string | null; eventId: string | null; ipHash: string },
+  extra?: Record<string, unknown>
 ) {
   logger.info(`claim.fail.${reason}`, {
     action: "claim",
@@ -75,6 +71,7 @@ function logClaimFail(
     eventId: context.eventId,
     chainId: CHAIN_ID,
     ipHash: context.ipHash,
+    ...extra,
   });
 }
 
@@ -89,15 +86,21 @@ function logClaimSuccess(context: { tokenId: string | null; eventId: string | nu
   });
 }
 
-async function getOnchainOwner(order: { tokenId?: string | null; nftAddress?: string | null }) {
+const eventTicketClaimAbi = [
+  "function ownerOf(uint256 tokenId) view returns (address)",
+  "function safeTransferFrom(address from,address to,uint256 tokenId)",
+  "function transferFrom(address from,address to,uint256 tokenId)",
+  "function paymentIdOf(uint256 tokenId) view returns (bytes32)",
+  "function claim(uint256 tokenId)",
+];
+
+async function getOnchainOwner(
+  order: { tokenId?: string | null; nftAddress?: string | null },
+  provider: JsonRpcProvider
+) {
   if (!order.tokenId || !order.nftAddress) return null;
-  const publicClient = createPublicClient({ transport: http(RPC_URL) });
-  const ownerRaw = (await publicClient.readContract({
-    address: getAddress(order.nftAddress),
-    abi: eventTicketAbi,
-    functionName: "ownerOf",
-    args: [BigInt(order.tokenId)],
-  })) as `0x${string}`;
+  const contract = new Contract(getAddress(order.nftAddress), eventTicketClaimAbi, provider);
+  const ownerRaw = (await contract.ownerOf(BigInt(order.tokenId))) as string;
   return getAddress(ownerRaw);
 }
 
@@ -129,7 +132,7 @@ export async function POST(request: Request) {
   let payload: ClaimPayload;
   try {
     payload = (await request.json()) as ClaimPayload;
-  } catch (error) {
+  } catch {
     logClaimFail("invalid_json", { tokenId: null, eventId: null, ipHash });
     return jsonNoStore({ ok: false, reason: "invalid_json", error: "Invalid JSON" }, { status: 400 });
   }
@@ -152,46 +155,89 @@ export async function POST(request: Request) {
     return jsonNoStore({ ok: false, reason: "order_not_paid", error: "Order not paid" }, { status: 400 });
   }
 
-  const mintMode = resolveMintMode(order);
-  if (mintMode === "direct") {
+  if (typeof payload?.walletAddress !== "string" || !isAddress(payload.walletAddress)) {
+    logClaimFail("invalid_wallet", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     return jsonNoStore(
-      { ok: true, status: "not_required", message: "Ticket already minted to buyer; no claim needed", claimed: true },
+      { ok: false, reason: "invalid_wallet", error: "Valid walletAddress is required" },
+      { status: 400 }
+    );
+  }
+
+  if (payload?.tokenId && order.tokenId && payload.tokenId.trim() !== order.tokenId) {
+    logClaimFail("not_owner", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    return jsonNoStore({ ok: false, reason: "not_owner", error: "TokenId does not match order" }, { status: 403 });
+  }
+
+  const walletAddress = getAddress(payload.walletAddress);
+  const mintMode = resolveMintModeFromOrder(order);
+  const tokenId = order.tokenId ?? (payload?.tokenId?.trim() || null);
+  const nftAddress = order.nftAddress ?? null;
+
+  if (!RPC_URL) {
+    logClaimFail("server_misconfigured", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash }, {
+      missingEnv: "RPC_URL",
+    });
+    return jsonNoStore({ ok: false, reason: "server_misconfigured", error: "Server misconfigured" }, { status: 500 });
+  }
+
+  if (!tokenId || !nftAddress) {
+    logClaimFail("not_ready", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    return jsonNoStore({ ok: false, reason: "not_ready", error: "Order not ready for claim" }, { status: 400 });
+  }
+
+  const provider = new JsonRpcProvider(RPC_URL);
+  let onchainOwner: string | null = null;
+  try {
+    onchainOwner = await getOnchainOwner({ tokenId, nftAddress }, provider);
+  } catch {
+    logClaimFail("not_ready", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    return jsonNoStore({ ok: false, reason: "not_ready", error: "Unable to verify onchain owner" }, { status: 500 });
+  }
+
+  if (onchainOwner && onchainOwner === walletAddress) {
+    if (order.ticketState !== "gate_validated") {
+      const now = new Date().toISOString();
+      const incomingClaimCode = payload.claimCode?.trim() || null;
+      const resolvedClaimCode = order.claimCode ?? incomingClaimCode;
+      const resolvedClaimCodeHash =
+        order.claimCodeHash ?? (incomingClaimCode ? hashClaimCode(incomingClaimCode) : null);
+      const resolvedClaimCodeCreatedAt =
+        order.claimCodeCreatedAt ?? (incomingClaimCode ? now : null);
+      const updated = applyAtLeastTransition(order, "claimed", {
+        claimStatus: "claimed",
+        claimedTo: walletAddress,
+        claimedAt: order.claimedAt ?? now,
+        claimCode: resolvedClaimCode ?? null,
+        claimCodeHash: resolvedClaimCodeHash ?? null,
+        claimCodeCreatedAt: resolvedClaimCodeCreatedAt ?? null,
+      });
+      await persistOrder(updated);
+    }
+
+    logClaimSuccess({ tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    return jsonNoStore(
+      {
+        ok: true,
+        status: "not_required",
+        message: "Ticket already owned by buyer; no claim needed",
+        claimed: true,
+      },
       { status: 200 }
     );
   }
 
-  if (typeof payload?.claimCode !== "string" || !payload.claimCode.trim()) {
-    logClaimFail("missing_claim_code", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+  if (mintMode === "direct") {
+    logClaimFail("not_owner", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     return jsonNoStore(
-      { ok: false, reason: "missing_claim_code", error: "Claim code is required for custody mint" },
-      { status: 400 }
-    );
-  }
-  if (typeof payload?.walletAddress !== "string" || !isAddress(payload.walletAddress)) {
-    logClaimFail("invalid_wallet", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
-    return jsonNoStore(
-      { ok: false, reason: "invalid_wallet", error: "Valid walletAddress is required for custody mint" },
-      { status: 400 }
+      { ok: false, reason: "not_owner", error: "Ticket is owned by a different wallet" },
+      { status: 403 }
     );
   }
 
-  const walletAddress = getAddress(payload.walletAddress);
-  try {
-    const onchainOwner = await getOnchainOwner(order);
-    if (onchainOwner && onchainOwner === walletAddress) {
-      return jsonNoStore(
-        { ok: true, status: "not_required", message: "Ticket already owned by buyer; no claim needed", claimed: true },
-        { status: 200 }
-      );
-    }
-  } catch {
-    logClaimFail("not_ready", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
-    return jsonNoStore({ ok: false, reason: "not_ready", error: "Unable to verify onchain owner" }, { status: 500 });
-  }
   if (order.ticketState === "claimed" || order.ticketState === "gate_validated") {
     const claimedTo = order.claimedTo ? getAddress(order.claimedTo) : null;
     if (claimedTo && claimedTo !== walletAddress) {
-      logClaimFail("not_owner", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+      logClaimFail("not_owner", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
       emitMetric(
         "claim_already",
         {
@@ -204,7 +250,7 @@ export async function POST(request: Request) {
       );
       return jsonNoStore({ ok: false, reason: "not_owner", error: "Not owner" }, { status: 403 });
     }
-    logClaimFail("already_claimed", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    logClaimFail("already_claimed", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     emitMetric(
       "claim_already",
       {
@@ -218,9 +264,42 @@ export async function POST(request: Request) {
     return jsonNoStore({ ok: false, reason: "already_claimed", error: "Already claimed" }, { status: 400 });
   }
   if (order.ticketState !== "minted" && order.ticketState !== "claimable") {
-    logClaimFail("not_ready", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    logClaimFail("not_ready", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     return jsonNoStore({ ok: false, reason: "not_ready", error: "Order not ready for claim" }, { status: 400 });
   }
+
+  const custodyAddress = order.custodyAddress ?? env.CUSTODY_WALLET_ADDRESS ?? null;
+  if (!custodyAddress) {
+    logClaimFail("server_misconfigured", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash }, {
+      missingEnv: "CUSTODY_WALLET_ADDRESS",
+    });
+    return jsonNoStore({ ok: false, reason: "server_misconfigured", error: "Server misconfigured" }, { status: 500 });
+  }
+  const normalizedCustodyAddress = getAddress(custodyAddress);
+  if (onchainOwner && onchainOwner !== normalizedCustodyAddress) {
+    logClaimFail("not_owner", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    return jsonNoStore(
+      { ok: false, reason: "not_owner", error: "Ticket is owned by a different wallet" },
+      { status: 403 }
+    );
+  }
+
+  if (typeof payload?.claimCode !== "string" || !payload.claimCode.trim()) {
+    logClaimFail("missing_claim_code", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    return jsonNoStore(
+      { ok: false, reason: "missing_claim_code", error: "Claim code is required for custody mint" },
+      { status: 400 }
+    );
+  }
+
+  if (order.claimExpiresAt) {
+    const expiresAt = Date.parse(order.claimExpiresAt);
+    if (!Number.isNaN(expiresAt) && Date.now() > expiresAt) {
+      logClaimFail("claim_expired", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+      return jsonNoStore({ ok: false, reason: "claim_expired", error: "Claim expired" }, { status: 410 });
+    }
+  }
+
   let claimCodeMatches = false;
   if (order.claimCode) {
     const requestCode = payload.claimCode.trim();
@@ -248,81 +327,16 @@ export async function POST(request: Request) {
       computedBuffer.length === storedBuffer.length && crypto.timingSafeEqual(computedBuffer, storedBuffer);
   }
 
-  if (!order.custodyAddress || (!order.claimCode && !order.claimCodeHash)) {
-    if (!order.tokenId || !order.nftAddress) {
-      logClaimFail("not_ready", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
-      return jsonNoStore({ ok: false, reason: "not_ready", error: "Order not ready for claim" }, { status: 400 });
-    }
-    const publicClient = createPublicClient({ transport: http(RPC_URL) });
-    let owner: string | null = null;
-    try {
-      const ownerRaw = (await publicClient.readContract({
-        address: getAddress(order.nftAddress),
-        abi: eventTicketAbi,
-        functionName: "ownerOf",
-        args: [BigInt(order.tokenId)],
-      })) as `0x${string}`;
-      owner = getAddress(ownerRaw);
-    } catch {
-      logClaimFail("not_ready", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
-      return jsonNoStore({ ok: false, reason: "not_ready", error: "Unable to verify onchain owner" }, { status: 500 });
-    }
-
-    if (!claimCodeMatches && order.claimCodeHash) {
-      logClaimFail("invalid_code", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
-      emitMetric(
-        "claim_already",
-        {
-          route,
-          merchantOrderId: order.merchantOrderId,
-          ip,
-          reason: "invalid_code",
-          latencyMs: Date.now() - startedAt,
-        }
-      );
-      return jsonNoStore({ ok: false, reason: "invalid_code", error: "Invalid claimCode" }, { status: 401 });
-    }
-
-    if (owner !== walletAddress) {
-      logClaimFail("not_owner", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
-      return jsonNoStore({ ok: false, reason: "not_owner", error: "Not owner" }, { status: 403 });
-    }
-
-    const now = new Date().toISOString();
-    const updated = applyAtLeastTransition(order, "claimed", {
-      claimStatus: "claimed",
-      claimedTo: order.claimedTo ?? walletAddress,
-      claimedAt: order.claimedAt ?? now,
-      claimCode: order.claimCode ?? payload.claimCode.trim(),
-      claimCodeHash:
-        order.claimCodeHash ?? hashClaimCode(order.claimCode ?? payload.claimCode.trim()),
-      claimCodeCreatedAt: order.claimCodeCreatedAt ?? now,
-    });
-    await persistOrder(updated);
-
-    logClaimSuccess({ tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
-    return jsonNoStore(
-      { ok: true, status: "not_required", message: "Ticket already minted to buyer; no claim needed", claimed: true },
-      { status: 200 }
-    );
-  }
-  if (order.claimExpiresAt) {
-    const expiresAt = Date.parse(order.claimExpiresAt);
-    if (!Number.isNaN(expiresAt) && Date.now() > expiresAt) {
-      logClaimFail("claim_expired", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
-      return jsonNoStore({ ok: false, reason: "claim_expired", error: "Claim expired" }, { status: 410 });
-    }
-  }
-  if (!order.tokenId || !order.nftAddress) {
-    logClaimFail("not_ready", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+  if (!order.claimCode && !order.claimCodeHash) {
+    logClaimFail("not_ready", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     return jsonNoStore({ ok: false, reason: "not_ready", error: "Order not ready for claim" }, { status: 400 });
   }
 
-  const claimRateKey = `${route}:${ip}:${order.tokenId ?? order.merchantOrderId}`;
+  const claimRateKey = `${route}:${ip}:${tokenId ?? order.merchantOrderId}`;
   const claimRate = claimTokenLimiter(claimRateKey);
   if (!claimRate.ok) {
     const retryAfter = Math.ceil(claimRate.retryAfterMs / 1000);
-    logClaimFail("rate_limited", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    logClaimFail("rate_limited", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     emitMetric(
       "rate_limit_hit",
       { route, ip, reason: "rate_limit", latencyMs: Date.now() - startedAt }
@@ -334,7 +348,7 @@ export async function POST(request: Request) {
   }
 
   if (!claimCodeMatches) {
-    logClaimFail("invalid_code", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    logClaimFail("invalid_code", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     emitMetric(
       "claim_already",
       {
@@ -348,25 +362,8 @@ export async function POST(request: Request) {
     return jsonNoStore({ ok: false, reason: "invalid_code", error: "Invalid claimCode" }, { status: 401 });
   }
 
-  const custodyKeyRaw =
-    process.env.CUSTODY_PRIVATE_KEY ?? process.env.BACKEND_WALLET_PRIVATE_KEY ?? process.env.RELAYER_PRIVATE_KEY;
-  if (!custodyKeyRaw) {
-    logClaimFail("server_misconfigured", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
-    return jsonNoStore({ ok: false, reason: "server_misconfigured", error: "Server misconfigured" }, { status: 500 });
-  }
-  const custodyKey = (custodyKeyRaw.startsWith("0x") ? custodyKeyRaw : `0x${custodyKeyRaw}`) as `0x${string}`;
-  const account = privateKeyToAccount(custodyKey);
-  const custodyAddress = getAddress(order.custodyAddress);
-  if (account.address !== custodyAddress) {
-    logClaimFail("server_misconfigured", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
-    return jsonNoStore({ ok: false, reason: "server_misconfigured", error: "Server misconfigured" }, { status: 500 });
-  }
-
-  const publicClient = createPublicClient({ transport: http(RPC_URL) });
-  const walletClient = createWalletClient({ account, transport: http(RPC_URL) });
-
   if (hasKv) {
-    lockKey = `claim:lock:${order.tokenId ?? order.merchantOrderId}`;
+    lockKey = `claim:lock:${tokenId ?? order.merchantOrderId}`;
     const acquired = await kv.set(lockKey, "1", { nx: true, ex: CLAIM_LOCK_TTL_SECONDS });
     if (!acquired) {
       emitMetric(
@@ -387,14 +384,10 @@ export async function POST(request: Request) {
     order.orderId ?? (order.paymentPreimage ? hashPaymentPreimage(order.paymentPreimage) : null);
   if (expectedPaymentId) {
     try {
-      const onchainPaymentId = (await publicClient.readContract({
-        address: getAddress(order.nftAddress),
-        abi: eventTicketAbi,
-        functionName: "paymentIdOf",
-        args: [BigInt(order.tokenId)],
-      })) as `0x${string}`;
+      const contract = new Contract(getAddress(nftAddress), eventTicketClaimAbi, provider);
+      const onchainPaymentId = (await contract.paymentIdOf(BigInt(tokenId))) as string;
       if (onchainPaymentId.toLowerCase() !== expectedPaymentId.toLowerCase()) {
-        logClaimFail("invalid_code", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+        logClaimFail("invalid_code", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
         if (lockKey) {
           await kv.del(lockKey).catch(() => {});
         }
@@ -411,51 +404,64 @@ export async function POST(request: Request) {
     }
   }
 
-  try {
-    const { request: transferRequest } = await publicClient.simulateContract({
-      account,
-      address: getAddress(order.nftAddress),
-      abi: eventTicketAbi,
-      functionName: "safeTransferFrom",
-      args: [custodyAddress, walletAddress, BigInt(order.tokenId)],
+  const custodyKeyRaw = process.env.CUSTODY_WALLET_PRIVATE_KEY;
+  if (!custodyKeyRaw) {
+    logClaimFail("server_misconfigured", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash }, {
+      missingEnv: "CUSTODY_WALLET_PRIVATE_KEY",
     });
+    if (lockKey) {
+      await kv.del(lockKey).catch(() => {});
+    }
+    return jsonNoStore({ ok: false, reason: "server_misconfigured", error: "Server misconfigured" }, { status: 500 });
+  }
+  const custodyKey = custodyKeyRaw.startsWith("0x") ? custodyKeyRaw : `0x${custodyKeyRaw}`;
+  const signer = new Wallet(custodyKey, provider);
+  if (getAddress(signer.address) !== normalizedCustodyAddress) {
+    logClaimFail("server_misconfigured", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash }, {
+      custodyAddressMismatch: true,
+    });
+    if (lockKey) {
+      await kv.del(lockKey).catch(() => {});
+    }
+    return jsonNoStore({ ok: false, reason: "server_misconfigured", error: "Server misconfigured" }, { status: 500 });
+  }
 
+  try {
+    const contract = new Contract(getAddress(nftAddress), eventTicketClaimAbi, signer);
     let chainClaimed = false;
-    let chainClaimTxHash: `0x${string}` | null = null;
+    let chainClaimTxHash: string | null = null;
     let chainClaimError: string | null = null;
 
-    // Contract claim() requires current owner; custody owns the token before transfer.
     try {
-      const { request: claimRequest } = await publicClient.simulateContract({
-        account,
-        address: getAddress(order.nftAddress),
-        abi: eventTicketAbi,
-        functionName: "claim",
-        args: [BigInt(order.tokenId)],
-      });
-
-      chainClaimTxHash = await walletClient.writeContract(claimRequest);
-      await publicClient.waitForTransactionReceipt({ hash: chainClaimTxHash });
+      const claimTx = await contract.claim(BigInt(tokenId));
+      chainClaimTxHash = claimTx.hash;
+      await claimTx.wait(1);
       chainClaimed = true;
     } catch (error) {
       chainClaimError = error instanceof Error ? error.message : "Unknown error";
       chainClaimed = false;
     }
 
-    const transferTxHash = await walletClient.writeContract(transferRequest);
-    await publicClient.waitForTransactionReceipt({ hash: transferTxHash });
+    let transferTx;
+    try {
+      transferTx = await contract.safeTransferFrom(normalizedCustodyAddress, walletAddress, BigInt(tokenId));
+    } catch {
+      transferTx = await contract.transferFrom(normalizedCustodyAddress, walletAddress, BigInt(tokenId));
+    }
+    await transferTx.wait(1);
 
+    const txHash = transferTx.hash as string;
     await markOrderClaimed({
       merchantOrderId: order.merchantOrderId,
       claimedTo: walletAddress,
       claimedAt: new Date().toISOString(),
-      txHash: transferTxHash,
+      txHash,
       chainClaimed,
       chainClaimTxHash,
       chainClaimError,
     });
 
-    logClaimSuccess({ tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    logClaimSuccess({ tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     emitMetric(
       "claim_ok",
       { route, merchantOrderId: order.merchantOrderId, ip, latencyMs: Date.now() - startedAt }
@@ -466,13 +472,18 @@ export async function POST(request: Request) {
     return jsonNoStore({
       ok: true,
       status: "claimed",
-      transferTxHash,
+      txHash,
+      transferTxHash: txHash,
+      tokenId,
+      claimed: true,
+      claimedTo: walletAddress,
+      mintMode: "custody",
       chainClaimed,
       ...(debugEnabled && chainClaimTxHash ? { chainClaimTxHash } : {}),
       ...(debugEnabled && chainClaimError ? { chainClaimError } : {}),
     });
-  } catch (error) {
-    logClaimFail("claim_failed", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+  } catch {
+    logClaimFail("claim_failed", { tokenId: tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     if (lockKey) {
       await kv.del(lockKey).catch(() => {});
     }

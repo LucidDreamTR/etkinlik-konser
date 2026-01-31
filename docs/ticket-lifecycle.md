@@ -35,6 +35,8 @@ Required envs:
 Claim requirement:
 - Direct mint → `/api/tickets/claim` returns `status="not_required"` and `claimed=true`.
 - Custody mint → `/api/tickets/claim` requires `merchantOrderId`, `claimCode`, and `walletAddress`.
+  - The claim endpoint transfers the NFT from custody to the buyer.
+  - `CUSTODY_WALLET_PRIVATE_KEY` is required only when an onchain custody transfer is actually needed (after owner checks).
 
 ## Endpoint mapping
 - `/api/tickets/intent`: creates/updates order as `intent_created` (never downgrades).

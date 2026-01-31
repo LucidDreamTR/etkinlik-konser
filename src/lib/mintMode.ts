@@ -12,3 +12,13 @@ export function getMintRecipient(
     custodyWalletAddress: env.CUSTODY_WALLET_ADDRESS ?? null,
   });
 }
+
+export function resolveMintModeFromOrder(order: {
+  mintMode?: MintMode | null;
+  custodyAddress?: string | null;
+}): MintMode {
+  const env = getServerEnv();
+  if (order.mintMode) return order.mintMode;
+  if (order.custodyAddress) return "custody";
+  return env.MINT_MODE ?? "direct";
+}

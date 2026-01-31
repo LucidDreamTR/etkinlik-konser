@@ -12,10 +12,12 @@ await import("ts-node/register");
 const require = createRequire(import.meta.url);
 const ticketLifecycleModule = require("../src/lib/ticketLifecycle.ts");
 const claimCodeModule = require("../src/lib/claimCode.ts");
+const claimCoreModule = require("../src/lib/claimCore.ts");
 const mintModeCoreModulePath = require.resolve("../src/lib/mintModeCore.ts");
 
 const { applyAtLeastTransition, applyTransition, canTransition } = ticketLifecycleModule;
 const { generateClaimCode, isFormattedClaimCode } = claimCodeModule;
+const { resolveClaimRequirement } = claimCoreModule;
 
 function assertThrows(fn, message) {
   let threw = false;
@@ -107,3 +109,36 @@ assertThrows(
 );
 
 console.log("mint mode validation passed");
+
+const buyer = "0x0000000000000000000000000000000000000001";
+const custody = "0x0000000000000000000000000000000000000002";
+const other = "0x0000000000000000000000000000000000000003";
+
+const notRequired = resolveClaimRequirement({
+  mintMode: "custody",
+  onchainOwner: buyer,
+  buyerAddress: buyer,
+  custodyAddress: custody,
+});
+assert.equal(notRequired.status, "not_required", "owner == buyer should skip custody transfer");
+assert.equal(notRequired.needsCustodySigner, false, "no custody signer needed when buyer already owns");
+
+const needsTransfer = resolveClaimRequirement({
+  mintMode: "custody",
+  onchainOwner: custody,
+  buyerAddress: buyer,
+  custodyAddress: custody,
+});
+assert.equal(needsTransfer.status, "needs_transfer", "custody owner should require transfer");
+assert.equal(needsTransfer.needsCustodySigner, true, "custody signer required when transfer needed");
+
+const invalidOwner = resolveClaimRequirement({
+  mintMode: "custody",
+  onchainOwner: other,
+  buyerAddress: buyer,
+  custodyAddress: custody,
+});
+assert.equal(invalidOwner.status, "invalid_owner", "unexpected owner should be invalid");
+assert.equal(invalidOwner.needsCustodySigner, false, "invalid owner should not require custody signer");
+
+console.log("custody claim validation passed");
