@@ -4,15 +4,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { parseGatePayloadFromSearchParams, parseGatePayloadFromString } from "@/src/lib/gatePayload";
-
-type Status =
-  | "IDLE"
-  | "VALID"
-  | "ALREADY_USED"
-  | "NOT_CLAIMED"
-  | "INVALID_CODE"
-  | "UNAUTHORIZED"
-  | "ERROR";
+import { resolveGateStatus, type GateResponseSummary } from "@/app/gate/gateStatus";
 
 type LastRequest = {
   payload: { eventId: string; tokenId: string; code: string };
@@ -33,42 +25,6 @@ function formatJson(value: unknown): string {
   }
 }
 
-function deriveStatus(response: { ok?: boolean; valid?: boolean; reason?: string } | null): Status {
-  if (!response) return "IDLE";
-  if (response.ok && response.valid) return "VALID";
-  switch (response.reason) {
-    case "already_used":
-      return "ALREADY_USED";
-    case "not_claimed":
-      return "NOT_CLAIMED";
-    case "invalid_code":
-      return "INVALID_CODE";
-    case "unauthorized":
-      return "UNAUTHORIZED";
-    default:
-      return "ERROR";
-  }
-}
-
-function statusClasses(status: Status): string {
-  switch (status) {
-    case "VALID":
-      return "bg-green-500/20 text-green-300 border-green-500/40";
-    case "ALREADY_USED":
-      return "bg-amber-500/20 text-amber-300 border-amber-500/40";
-    case "NOT_CLAIMED":
-      return "bg-orange-500/20 text-orange-300 border-orange-500/40";
-    case "INVALID_CODE":
-      return "bg-red-500/20 text-red-300 border-red-500/40";
-    case "UNAUTHORIZED":
-      return "bg-red-500/20 text-red-300 border-red-500/40";
-    case "ERROR":
-      return "bg-red-500/20 text-red-300 border-red-500/40";
-    default:
-      return "bg-white/5 text-white/60 border-white/10";
-  }
-}
-
 export default function GatePage() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-[#0A0A0A] text-white" />}>
@@ -83,12 +39,14 @@ function GatePageContent() {
   const [tokenId, setTokenId] = useState("");
   const [code, setCode] = useState("");
   const [remember, setRemember] = useState(false);
-  const [status, setStatus] = useState<Status>("IDLE");
+  const [responseSummary, setResponseSummary] = useState<GateResponseSummary | null>(null);
+  const [clientError, setClientError] = useState<"missing_operator_key" | "missing_code" | "missing_fields" | null>(null);
   const [responseText, setResponseText] = useState("");
   const [lastRequest, setLastRequest] = useState<LastRequest | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [loadedFromUrl, setLoadedFromUrl] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const tokenIdRef = useRef<HTMLInputElement | null>(null);
   const searchParams = useSearchParams();
 
@@ -130,7 +88,10 @@ function GatePageContent() {
     }
   }, [remember, operatorKey, eventId]);
 
-  const statusLabel = useMemo(() => (status === "IDLE" ? "—" : status), [status]);
+  const statusInfo = useMemo(
+    () => resolveGateStatus({ response: responseSummary, clientError }),
+    [responseSummary, clientError]
+  );
 
   function applyParsedPayload(parsed: { eventId?: string; tokenId?: string; code?: string }) {
     if (parsed.eventId) setEventId(parsed.eventId);
@@ -150,21 +111,28 @@ function GatePageContent() {
   async function handleVerify() {
     setErrorMessage("");
     setResponseText("");
+    setResponseSummary(null);
+    setClientError(null);
+    setCopyState("idle");
 
     if (!operatorKey.trim()) {
       setErrorMessage("Operator key is required.");
+      setClientError("missing_operator_key");
       return;
     }
     if (!eventId.trim()) {
       setErrorMessage("Event ID is required.");
+      setClientError("missing_fields");
       return;
     }
     if (!tokenId.trim()) {
       setErrorMessage("Token ID is required.");
+      setClientError("missing_fields");
       return;
     }
     if (!code.trim()) {
       setErrorMessage("Claim code is required.");
+      setClientError("missing_code");
       return;
     }
 
@@ -192,13 +160,13 @@ function GatePageContent() {
 
       if (parsed && typeof parsed === "object") {
         setResponseText(formatJson(parsed));
-        setStatus(deriveStatus(parsed as { ok?: boolean; valid?: boolean; reason?: string }));
+        setResponseSummary(parsed as GateResponseSummary);
       } else {
         setResponseText(text || "(empty response)");
-        setStatus(response.ok ? "ERROR" : "ERROR");
+        setResponseSummary({ ok: response.ok });
       }
     } catch (error) {
-      setStatus("ERROR");
+      setResponseSummary({ ok: false });
       setResponseText(error instanceof Error ? error.message : "Unknown error");
     } finally {
       setIsVerifying(false);
@@ -208,11 +176,24 @@ function GatePageContent() {
   function handleClear() {
     setTokenId("");
     setCode("");
-    setStatus("IDLE");
+    setResponseSummary(null);
+    setClientError(null);
     setResponseText("");
     setLastRequest(null);
     setErrorMessage("");
+    setCopyState("idle");
     tokenIdRef.current?.focus();
+  }
+
+  async function handleCopyResponse() {
+    if (!responseText.trim()) return;
+    try {
+      await navigator.clipboard.writeText(responseText);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1500);
+    } catch {
+      setCopyState("error");
+    }
   }
 
   return (
@@ -320,10 +301,14 @@ function GatePageContent() {
         <section className="grid gap-4 rounded-xl border border-white/10 bg-white/5 p-6">
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <span className="text-white/60">Status</span>
-            <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusClasses(status)}`}>
-              {statusLabel}
+            <span
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] ${statusInfo.badgeClassName}`}
+            >
+              <span className="text-[10px]">{statusInfo.icon}</span>
+              {statusInfo.label}
             </span>
           </div>
+          <div className="text-sm text-white/70">{statusInfo.message}</div>
 
           <div className="grid gap-2 text-sm text-white/70">
             <div>Last Request</div>
@@ -340,7 +325,17 @@ function GatePageContent() {
           </div>
 
           <div className="grid gap-2 text-sm text-white/70">
-            <div>Response</div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>Response</div>
+              <button
+                className="rounded-md border border-white/10 bg-transparent px-3 py-1 text-[11px] uppercase tracking-[0.12em] text-white/70 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                type="button"
+                onClick={handleCopyResponse}
+                disabled={!responseText.trim()}
+              >
+                {copyState === "copied" ? "Copied" : copyState === "error" ? "Copy failed" : "Copy JSON"}
+              </button>
+            </div>
             <div className="rounded-md border border-white/10 bg-black/40 p-3 text-xs text-white/80">
               <pre className="whitespace-pre-wrap text-xs">
                 {responseText || "No response yet."}
