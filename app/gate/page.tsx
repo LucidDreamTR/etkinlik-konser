@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+
+import { parseGatePayloadFromSearchParams, parseGatePayloadFromString } from "@/src/lib/gatePayload";
 
 type Status =
   | "IDLE"
@@ -67,6 +70,14 @@ function statusClasses(status: Status): string {
 }
 
 export default function GatePage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#0A0A0A] text-white" />}>
+      <GatePageContent />
+    </Suspense>
+  );
+}
+
+function GatePageContent() {
   const [operatorKey, setOperatorKey] = useState("");
   const [eventId, setEventId] = useState("2");
   const [tokenId, setTokenId] = useState("");
@@ -77,7 +88,9 @@ export default function GatePage() {
   const [lastRequest, setLastRequest] = useState<LastRequest | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
+  const [loadedFromUrl, setLoadedFromUrl] = useState(false);
   const tokenIdRef = useRef<HTMLInputElement | null>(null);
+  const searchParams = useSearchParams();
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -97,6 +110,14 @@ export default function GatePage() {
   }, []);
 
   useEffect(() => {
+    if (!searchParams) return;
+    const parsed = parseGatePayloadFromSearchParams(searchParams);
+    if (parsed.eventId || parsed.tokenId || parsed.code) {
+      applyParsedPayload(parsed);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     if (remember) {
       window.localStorage.setItem(STORAGE_KEYS.remember, "true");
@@ -110,6 +131,21 @@ export default function GatePage() {
   }, [remember, operatorKey, eventId]);
 
   const statusLabel = useMemo(() => (status === "IDLE" ? "—" : status), [status]);
+
+  function applyParsedPayload(parsed: { eventId?: string; tokenId?: string; code?: string }) {
+    if (parsed.eventId) setEventId(parsed.eventId);
+    if (parsed.tokenId) setTokenId(parsed.tokenId);
+    if (parsed.code) setCode(parsed.code);
+    setLoadedFromUrl(true);
+  }
+
+  function handlePastePayload(value: string): boolean {
+    const parsed = parseGatePayloadFromString(value);
+    if (!parsed) return false;
+    if (!parsed.eventId && !parsed.tokenId && !parsed.code) return false;
+    applyParsedPayload(parsed);
+    return true;
+  }
 
   async function handleVerify() {
     setErrorMessage("");
@@ -205,7 +241,11 @@ export default function GatePage() {
               className="rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-white/30"
               type="text"
               value={eventId}
-              onChange={(event) => setEventId(event.target.value)}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (handlePastePayload(value)) return;
+                setEventId(value);
+              }}
             />
           </label>
 
@@ -216,7 +256,11 @@ export default function GatePage() {
               className="rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-white/30"
               type="text"
               value={tokenId}
-              onChange={(event) => setTokenId(event.target.value)}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (handlePastePayload(value)) return;
+                setTokenId(value);
+              }}
             />
           </label>
 
@@ -226,9 +270,17 @@ export default function GatePage() {
               className="rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-white/30"
               type="text"
               value={code}
-              onChange={(event) => setCode(event.target.value)}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (handlePastePayload(value)) return;
+                setCode(value);
+              }}
             />
           </label>
+
+          {loadedFromUrl ? (
+            <div className="text-xs text-white/50">Loaded from URL.</div>
+          ) : null}
 
           <label className="flex items-center gap-2 text-sm text-white/70">
             <input
