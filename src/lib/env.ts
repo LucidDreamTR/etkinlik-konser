@@ -18,6 +18,11 @@ const boolFromEnv = (defaultValue: boolean) =>
     return value;
   }, z.boolean());
 
+const mintModeSchema = z.preprocess((value) => {
+  if (typeof value === "undefined" || value === null || value === "") return "direct";
+  return value;
+}, z.enum(["direct", "custody"]));
+
 const serverEnvSchema = z.object({
   NEXT_PUBLIC_RPC_URL_SEPOLIA: z.string().optional(),
   NEXT_PUBLIC_RPC_URL_MAINNET: z.string().optional(),
@@ -35,6 +40,8 @@ const serverEnvSchema = z.object({
   MAINNET_ENABLED: boolFromEnv(false),
   METRICS_ENABLED: boolFromEnv(true),
   GATE_OPERATOR_KEY: z.string().optional(),
+  MINT_MODE: mintModeSchema,
+  CUSTODY_WALLET_ADDRESS: z.string().optional(),
   RPC_URL: z.string().optional(),
   VERCEL_ENV: z.string().optional(),
   VERCEL_GIT_COMMIT_SHA: z.string().optional(),

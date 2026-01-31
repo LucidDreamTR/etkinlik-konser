@@ -58,6 +58,12 @@ type ClaimErrorReason =
   | "server_misconfigured"
   | "claim_failed";
 
+function resolveMintMode(order: { mintMode?: string | null; custodyAddress?: string | null }): "direct" | "custody" {
+  if (order.mintMode === "custody") return "custody";
+  if (order.mintMode === "direct") return "direct";
+  return order.custodyAddress ? "custody" : "direct";
+}
+
 function logClaimFail(
   reason: ClaimErrorReason,
   context: { tokenId: string | null; eventId: string | null; ipHash: string }
@@ -81,6 +87,18 @@ function logClaimSuccess(context: { tokenId: string | null; eventId: string | nu
     chainId: CHAIN_ID,
     ipHash: context.ipHash,
   });
+}
+
+async function getOnchainOwner(order: { tokenId?: string | null; nftAddress?: string | null }) {
+  if (!order.tokenId || !order.nftAddress) return null;
+  const publicClient = createPublicClient({ transport: http(RPC_URL) });
+  const ownerRaw = (await publicClient.readContract({
+    address: getAddress(order.nftAddress),
+    abi: eventTicketAbi,
+    functionName: "ownerOf",
+    args: [BigInt(order.tokenId)],
+  })) as `0x${string}`;
+  return getAddress(ownerRaw);
 }
 
 export async function POST(request: Request) {
@@ -123,17 +141,6 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  if (typeof payload?.claimCode !== "string" || !payload.claimCode.trim()) {
-    logClaimFail("missing_claim_code", { tokenId: null, eventId: null, ipHash });
-    return jsonNoStore({ ok: false, reason: "missing_claim_code", error: "Missing claimCode" }, { status: 400 });
-  }
-  if (typeof payload?.walletAddress !== "string" || !isAddress(payload.walletAddress)) {
-    logClaimFail("invalid_wallet", { tokenId: null, eventId: null, ipHash });
-    return jsonNoStore({ ok: false, reason: "invalid_wallet", error: "Invalid walletAddress" }, { status: 400 });
-  }
-
-  const walletAddress = getAddress(payload.walletAddress);
-
   const orderRaw = await getOrderByMerchantId(payload.merchantOrderId);
   const order = orderRaw ? ensureTicketState(orderRaw) : undefined;
   if (!order) {
@@ -143,6 +150,43 @@ export async function POST(request: Request) {
   if (order.payment_status !== "paid") {
     logClaimFail("order_not_paid", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
     return jsonNoStore({ ok: false, reason: "order_not_paid", error: "Order not paid" }, { status: 400 });
+  }
+
+  const mintMode = resolveMintMode(order);
+  if (mintMode === "direct") {
+    return jsonNoStore(
+      { ok: true, status: "not_required", message: "Ticket already minted to buyer; no claim needed", claimed: true },
+      { status: 200 }
+    );
+  }
+
+  if (typeof payload?.claimCode !== "string" || !payload.claimCode.trim()) {
+    logClaimFail("missing_claim_code", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    return jsonNoStore(
+      { ok: false, reason: "missing_claim_code", error: "Claim code is required for custody mint" },
+      { status: 400 }
+    );
+  }
+  if (typeof payload?.walletAddress !== "string" || !isAddress(payload.walletAddress)) {
+    logClaimFail("invalid_wallet", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    return jsonNoStore(
+      { ok: false, reason: "invalid_wallet", error: "Valid walletAddress is required for custody mint" },
+      { status: 400 }
+    );
+  }
+
+  const walletAddress = getAddress(payload.walletAddress);
+  try {
+    const onchainOwner = await getOnchainOwner(order);
+    if (onchainOwner && onchainOwner === walletAddress) {
+      return jsonNoStore(
+        { ok: true, status: "not_required", message: "Ticket already owned by buyer; no claim needed", claimed: true },
+        { status: 200 }
+      );
+    }
+  } catch {
+    logClaimFail("not_ready", { tokenId: order.tokenId ?? null, eventId: order.eventId ?? null, ipHash });
+    return jsonNoStore({ ok: false, reason: "not_ready", error: "Unable to verify onchain owner" }, { status: 500 });
   }
   if (order.ticketState === "claimed" || order.ticketState === "gate_validated") {
     const claimedTo = order.claimedTo ? getAddress(order.claimedTo) : null;

@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 
-import "ts-node/register";
 import { createRequire } from "node:module";
+
+process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({
+  module: "CommonJS",
+  moduleResolution: "node",
+  esModuleInterop: true,
+});
+await import("ts-node/register");
 
 const require = createRequire(import.meta.url);
 const ticketLifecycleModule = require("../src/lib/ticketLifecycle.ts");
 const claimCodeModule = require("../src/lib/claimCode.ts");
+const mintModeCoreModulePath = require.resolve("../src/lib/mintModeCore.ts");
 
 const { applyAtLeastTransition, applyTransition, canTransition } = ticketLifecycleModule;
 const { generateClaimCode, isFormattedClaimCode } = claimCodeModule;
@@ -72,3 +79,31 @@ const gateValidatedAgain = applyAtLeastTransition(gateValidated, "gate_validated
   gateValidatedAt: gateValidated.gateValidatedAt,
 });
 assert.equal(gateValidatedAgain.ticketState, "gate_validated", "gate verify should be idempotent");
+
+function resetEnvCache() {
+  delete require.cache[mintModeCoreModulePath];
+}
+
+delete process.env.MINT_MODE;
+delete process.env.CUSTODY_WALLET_ADDRESS;
+resetEnvCache();
+const { resolveMintRecipient } = require("../src/lib/mintModeCore.ts");
+const directResult = resolveMintRecipient("0x0000000000000000000000000000000000000003", {
+  mintMode: process.env.MINT_MODE,
+  custodyWalletAddress: process.env.CUSTODY_WALLET_ADDRESS ?? null,
+});
+assert.equal(directResult.mode, "direct", "MINT_MODE should default to direct when missing");
+
+process.env.MINT_MODE = "custody";
+delete process.env.CUSTODY_WALLET_ADDRESS;
+resetEnvCache();
+assertThrows(
+  () =>
+    resolveMintRecipient("0x0000000000000000000000000000000000000003", {
+      mintMode: process.env.MINT_MODE,
+      custodyWalletAddress: process.env.CUSTODY_WALLET_ADDRESS ?? null,
+    }),
+  "custody mode should throw without CUSTODY_WALLET_ADDRESS"
+);
+
+console.log("mint mode validation passed");

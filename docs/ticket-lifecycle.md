@@ -22,6 +22,20 @@ This document defines the single source of truth for ticket lifecycle states and
 
 Same-state transitions are always permitted for idempotency.
 
+## Mint modes
+Minting behavior is controlled by `MINT_MODE` (server env).
+
+- `direct` (default): tickets are minted directly to the buyer’s wallet. Claim is not required.
+- `custody`: tickets are minted to a custody wallet and require a claim transfer to the buyer.
+
+Required envs:
+- `MINT_MODE`: `"direct"` or `"custody"` (defaults to `"direct"` if missing).
+- `CUSTODY_WALLET_ADDRESS`: required only when `MINT_MODE="custody"`.
+
+Claim requirement:
+- Direct mint → `/api/tickets/claim` returns `status="not_required"` and `claimed=true`.
+- Custody mint → `/api/tickets/claim` requires `merchantOrderId`, `claimCode`, and `walletAddress`.
+
 ## Endpoint mapping
 - `/api/tickets/intent`: creates/updates order as `intent_created` (never downgrades).
 - `/api/tickets/purchase`:

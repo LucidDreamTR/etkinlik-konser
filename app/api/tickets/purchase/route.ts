@@ -9,6 +9,7 @@ import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { purchaseOnchain } from "@/src/server/onchainPurchase";
 import { generateClaimCode, hashClaimCode } from "@/src/lib/claimCode";
 import { getServerEnv } from "@/src/lib/env";
+import { getMintRecipient } from "@/src/lib/mintMode";
 import { jsonNoStore } from "@/src/lib/http";
 import { emitMetric } from "@/src/lib/metrics";
 import { getChainConfig } from "@/src/lib/chain";
@@ -111,6 +112,16 @@ function resolveClaimCode(existing?: PaymentOrder | null): {
     claimCode,
     claimCodeCreatedAt: new Date().toISOString(),
     claimCodeHash: hashClaimCode(claimCode),
+  };
+}
+
+function resolveMintResponse(existing: PaymentOrder | null, buyer: string | null) {
+  const mintMode = existing?.mintMode ?? (existing?.custodyAddress ? "custody" : "direct");
+  const mintedTo = existing?.mintedTo ?? existing?.custodyAddress ?? existing?.buyerAddress ?? buyer;
+  return {
+    mintMode,
+    mintedTo,
+    claimRequired: mintMode === "custody",
   };
 }
 
@@ -267,6 +278,7 @@ export async function POST(request: Request) {
     }
 
     const paymentIntentId = intent.merchantOrderId;
+    const mintRecipient = getMintRecipient(buyerChecksumForMessage);
     const orderRate = purchaseOrderLimiter(`${route}:${clientIp}:${paymentIntentId}`);
     if (!orderRate.ok) {
       const retryAfter = Math.ceil(orderRate.retryAfterMs / 1000);
@@ -298,6 +310,7 @@ export async function POST(request: Request) {
     if (existing?.txHash) {
       const claimDetails = resolveClaimCode(existing);
       const persisted = await persistClaimCode(existing, claimDetails);
+      const mintResponse = resolveMintResponse(persisted, buyerChecksumForMessage);
       if (persisted.buyerAddress) {
         await maybeMarkClaimed(persisted, persisted.buyerAddress);
       }
@@ -320,6 +333,9 @@ export async function POST(request: Request) {
         paymentIntentId,
         orderId,
         claimCode: claimDetails.claimCode,
+        claimRequired: mintResponse.claimRequired,
+        mintedTo: mintResponse.mintedTo,
+        mintMode: mintResponse.mintMode,
         ...(debugEnabled ? { existingHadTxHash: true, lockHit: false } : {}),
       });
     }
@@ -352,15 +368,22 @@ export async function POST(request: Request) {
           "purchase_pending",
           { route, merchantOrderId: paymentIntentId, ip: clientIp, latencyMs: Date.now() - startedAt }
         );
-        return jsonNoStore({
-          ok: true,
-          status: "pending",
-          paymentIntentId,
-          orderId,
-          ...(existing?.claimCode ? { claimCode: existing.claimCode } : {}),
-          ...(debugEnabled ? { existingHadTxHash: false, lockHit: true } : {}),
-        });
-      }
+      return jsonNoStore({
+        ok: true,
+        status: "pending",
+        paymentIntentId,
+        orderId,
+        ...(existing?.claimCode ? { claimCode: existing.claimCode } : {}),
+        ...(existing
+          ? resolveMintResponse(existing, buyerChecksumForMessage)
+          : {
+              mintMode: mintRecipient.mode,
+              mintedTo: mintRecipient.recipient,
+              claimRequired: mintRecipient.mode === "custody",
+            }),
+        ...(debugEnabled ? { existingHadTxHash: false, lockHit: true } : {}),
+      });
+    }
     }
 
     const appUrl = getPublicBaseUrl();
@@ -376,7 +399,7 @@ export async function POST(request: Request) {
         eventId: intent.eventId,
         amountTry: intent.amountWei.toString(),
         amountWei: intent.amountWei,
-        buyerAddress: buyerChecksumForMessage,
+        buyerAddress: mintRecipient.recipient,
         uri: tokenUri,
       });
     } catch (error) {
@@ -386,6 +409,13 @@ export async function POST(request: Request) {
       }
       const message = err.message || "Onchain error";
       if (/payment id has already been used/i.test(message)) {
+        const mintResponse = existing
+          ? resolveMintResponse(existing, buyerChecksumForMessage)
+          : {
+              mintMode: mintRecipient.mode,
+              mintedTo: mintRecipient.recipient,
+              claimRequired: mintRecipient.mode === "custody",
+            };
         emitMetric(
           "purchase_duplicate",
           { route, merchantOrderId: paymentIntentId, ip: clientIp, latencyMs: Date.now() - startedAt }
@@ -396,6 +426,7 @@ export async function POST(request: Request) {
           paymentIntentId,
           orderId,
           ...(existing?.claimCode ? { claimCode: existing.claimCode } : {}),
+          ...mintResponse,
           ...(debugEnabled ? { onchainError: "duplicate" } : {}),
         });
       }
@@ -416,6 +447,13 @@ export async function POST(request: Request) {
       if (lockKey) {
         await kv.del(lockKey).catch(() => {});
       }
+      const mintResponse = existing
+        ? resolveMintResponse(existing, buyerChecksumForMessage)
+        : {
+            mintMode: mintRecipient.mode,
+            mintedTo: mintRecipient.recipient,
+            claimRequired: mintRecipient.mode === "custody",
+          };
       emitMetric(
         "purchase_duplicate",
         { route, merchantOrderId: paymentIntentId, ip: clientIp, latencyMs: Date.now() - startedAt }
@@ -426,6 +464,7 @@ export async function POST(request: Request) {
         paymentIntentId,
         orderId,
         ...(existing?.claimCode ? { claimCode: existing.claimCode } : {}),
+        ...mintResponse,
         ...(debugEnabled ? { existingHadTxHash: false, lockHit: false } : {}),
       });
     }
@@ -453,6 +492,9 @@ export async function POST(request: Request) {
     }
 
     const claimDetails = resolveClaimCode(existing);
+    const mintMode = mintRecipient.mode;
+    const mintedTo = mintRecipient.recipient;
+    const now = new Date().toISOString();
     const paidResult = await recordPaidOrder({
       merchantOrderId: paymentIntentId,
       orderId,
@@ -467,13 +509,18 @@ export async function POST(request: Request) {
       txHash: onchain.txHash,
       tokenId: mintedTokenId,
       nftAddress: onchain.nftAddress,
-      custodyAddress: null,
+      custodyAddress: mintMode === "custody" ? mintedTo : null,
+      mintMode,
+      mintedTo,
       intentSignature: signature,
       intentDeadline: intent.deadline.toString(),
       intentAmountWei: intent.amountWei.toString(),
       claimCode: claimDetails.claimCode,
       claimCodeCreatedAt: claimDetails.claimCodeCreatedAt,
       claimCodeHash: claimDetails.claimCodeHash,
+      claimStatus: mintMode === "direct" ? "claimed" : "unclaimed",
+      claimedTo: mintMode === "direct" ? buyerChecksumForMessage : null,
+      claimedAt: mintMode === "direct" ? now : null,
     });
 
     if (paidResult.order.buyerAddress) {
@@ -502,6 +549,9 @@ export async function POST(request: Request) {
       paymentIntentId,
       orderId,
       claimCode: claimDetails.claimCode,
+      claimRequired: mintMode === "custody",
+      mintedTo,
+      mintMode,
       ...(debugEnabled ? { existingHadTxHash: false, lockHit: false } : {}),
     });
   } catch (error) {

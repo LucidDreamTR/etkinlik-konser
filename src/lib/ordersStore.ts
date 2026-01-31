@@ -35,6 +35,8 @@ export type PaymentOrder = {
   tokenId?: string | null;
   nftAddress?: string | null;
   custodyAddress?: string | null;
+  mintMode?: "direct" | "custody" | null;
+  mintedTo?: string | null;
   claimCodeHash?: string | null;
   claimCode?: string | null;
   claimCodeCreatedAt?: string | null;
@@ -215,6 +217,8 @@ export async function recordPaidOrder(
         tokenId: order.tokenId ?? existing.tokenId ?? null,
         nftAddress: order.nftAddress ?? existing.nftAddress ?? null,
         custodyAddress: order.custodyAddress ?? existing.custodyAddress ?? null,
+        mintMode: order.mintMode ?? existing.mintMode ?? null,
+        mintedTo: order.mintedTo ?? existing.mintedTo ?? null,
         claimCodeHash: order.claimCodeHash ?? existing.claimCodeHash ?? null,
         claimCode: order.claimCode ?? existing.claimCode ?? null,
         claimCodeCreatedAt: order.claimCodeCreatedAt ?? existing.claimCodeCreatedAt ?? null,
@@ -260,6 +264,8 @@ export async function recordOrderStatus(
       | "tokenId"
       | "nftAddress"
       | "custodyAddress"
+      | "mintMode"
+      | "mintedTo"
       | "claimCodeHash"
       | "claimCode"
       | "claimCodeCreatedAt"
@@ -285,6 +291,8 @@ export async function recordOrderStatus(
       tokenId: null,
       nftAddress: null,
       custodyAddress: null,
+      mintMode: null,
+      mintedTo: null,
       claimCodeHash: null,
       claimCode: null,
       claimCodeCreatedAt: null,
