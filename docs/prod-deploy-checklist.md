@@ -1,5 +1,7 @@
 # Production Deploy Checklist (Vercel + Chain)
 
+Rollback plan (env-only): see `docs/rollback-plan.md`.
+
 ## Required Environment Variables
 Set in **Production** unless noted.
 

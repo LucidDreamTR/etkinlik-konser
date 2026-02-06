@@ -17,12 +17,24 @@ contract EventTicket is ERC721, ERC721URIStorage, AccessControl {
 
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
+    enum EventState {
+        CREATED,
+        ACTIVE,
+        CHECKIN,
+        CLOSED
+    }
+
     mapping(bytes32 => bool) public usedPaymentIds;
     mapping(uint256 => bytes32) private _tokenPaymentIds;
+    mapping(uint256 => EventState) public eventStates;
 
     struct TicketMeta {
         uint256 eventId;
         bool claimed;
+        bytes32 rulesHash;
+        address payoutSplitter;
+        uint8 transferPolicy;
+        EventState eventState;
     }
     mapping(uint256 => TicketMeta) public tickets;
 
@@ -45,22 +57,23 @@ contract EventTicket is ERC721, ERC721URIStorage, AccessControl {
      * @param eventId The ID of the event this ticket is for.
      * @param paymentId A unique ID from the payment provider to prevent replay attacks.
      */
-    function safeMint(address to, string memory uri, uint256 eventId, bytes32 paymentId)
-        public
-        onlyRole(MINTER_ROLE)
-    {
-        require(!usedPaymentIds[paymentId], "EventTicket: Payment ID has already been used");
-        usedPaymentIds[paymentId] = true;
+    function safeMint(address to, string memory uri, uint256 eventId, bytes32 paymentId) public onlyRole(MINTER_ROLE) {
+        _safeMintWithMeta(to, uri, eventId, paymentId, bytes32(0), address(0), 0);
+    }
 
-        uint256 tokenId = _tokenIdCounter;
-        unchecked {
-            _tokenIdCounter = tokenId + 1;
-        }
-        _safeMint(to, tokenId);
-        _setTokenURI(tokenId, uri);
-
-        tickets[tokenId] = TicketMeta({ eventId: eventId, claimed: false });
-        _tokenPaymentIds[tokenId] = paymentId;
+    /**
+     * @dev Backward-compatible overload that sets full ticket metadata at mint time.
+     */
+    function safeMint(
+        address to,
+        string memory uri,
+        uint256 eventId,
+        bytes32 paymentId,
+        bytes32 rulesHash,
+        address payoutSplitter,
+        uint8 transferPolicy
+    ) public onlyRole(MINTER_ROLE) {
+        _safeMintWithMeta(to, uri, eventId, paymentId, rulesHash, payoutSplitter, transferPolicy);
     }
 
     /**
@@ -69,7 +82,28 @@ contract EventTicket is ERC721, ERC721URIStorage, AccessControl {
      */
     function claim(uint256 tokenId) external {
         require(_requireOwned(tokenId) == msg.sender, "EventTicket: Caller is not the owner of the token");
-        tickets[tokenId].claimed = true;
+        TicketMeta storage ticket = tickets[tokenId];
+        require(!_isClosed(ticket.eventId, ticket.eventState), "EventTicket: Event is closed");
+
+        ticket.claimed = true;
+        if (ticket.eventState == EventState.CREATED || ticket.eventState == EventState.ACTIVE) {
+            ticket.eventState = EventState.CHECKIN;
+        }
+    }
+
+    /**
+     * @dev Updates global state for an eventId. CLOSED state locks mint/claim/transfer.
+     */
+    function setEventState(uint256 eventId, EventState newState) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        eventStates[eventId] = newState;
+    }
+
+    /**
+     * @dev Optional per-ticket state override for emergency/admin flows.
+     */
+    function setTicketEventState(uint256 tokenId, EventState newState) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _requireOwned(tokenId);
+        tickets[tokenId].eventState = newState;
     }
 
     /**
@@ -85,6 +119,51 @@ contract EventTicket is ERC721, ERC721URIStorage, AccessControl {
     function paymentIdOf(uint256 tokenId) external view returns (bytes32) {
         _requireOwned(tokenId);
         return _tokenPaymentIds[tokenId];
+    }
+
+    function _safeMintWithMeta(
+        address to,
+        string memory uri,
+        uint256 eventId,
+        bytes32 paymentId,
+        bytes32 rulesHash,
+        address payoutSplitter,
+        uint8 transferPolicy
+    ) internal {
+        require(eventStates[eventId] != EventState.CLOSED, "EventTicket: Event is closed");
+        require(!usedPaymentIds[paymentId], "EventTicket: Payment ID has already been used");
+        usedPaymentIds[paymentId] = true;
+
+        uint256 tokenId = _tokenIdCounter;
+        unchecked {
+            _tokenIdCounter = tokenId + 1;
+        }
+        _safeMint(to, tokenId);
+        _setTokenURI(tokenId, uri);
+
+        tickets[tokenId] = TicketMeta({
+            eventId: eventId,
+            claimed: false,
+            rulesHash: rulesHash,
+            payoutSplitter: payoutSplitter,
+            transferPolicy: transferPolicy,
+            eventState: EventState.ACTIVE
+        });
+        _tokenPaymentIds[tokenId] = paymentId;
+        eventStates[eventId] = EventState.ACTIVE;
+    }
+
+    function _isClosed(uint256 eventId, EventState ticketState) internal view returns (bool) {
+        return ticketState == EventState.CLOSED || eventStates[eventId] == EventState.CLOSED;
+    }
+
+    function _update(address to, uint256 tokenId, address auth) internal override returns (address) {
+        address from = _ownerOf(tokenId);
+        if (from != address(0) && to != address(0)) {
+            TicketMeta storage ticket = tickets[tokenId];
+            require(!_isClosed(ticket.eventId, ticket.eventState), "EventTicket: Event is closed");
+        }
+        return super._update(to, tokenId, auth);
     }
 
     // The following functions are overrides required by Solidity because of multiple inheritance.

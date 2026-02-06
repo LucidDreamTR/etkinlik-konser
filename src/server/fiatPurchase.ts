@@ -14,6 +14,7 @@ import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { requireEnv, validateServerEnv } from "@/src/server/env";
 import { logger } from "@/src/lib/logger";
 import { getChainConfig } from "@/src/lib/chain";
+import { checkRelayerGasBalance } from "@/src/lib/gasCheck";
 
 const RPC_URL = getChainConfig().rpcUrl;
 
@@ -102,6 +103,9 @@ export async function purchaseWithFiat({
   ) {
     logger.warn("fiatPurchase.rpc_localhost_with_sepolia", { rpcUrl: RPC_URL });
   }
+
+  await checkRelayerGasBalance(privateKeyRaw);
+
   const publicClient = createPublicClient({ transport: http(RPC_URL) });
   const walletClient = createWalletClient({ account, transport: http(RPC_URL) });
 

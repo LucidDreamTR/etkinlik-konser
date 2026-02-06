@@ -34,6 +34,7 @@ type PurchasePayload = {
   signature?: string;
   intentId?: string;
   merchantOrderId?: string;
+  skipClaim?: boolean;
 };
 
 const INTENT_TYPES = {
@@ -199,6 +200,13 @@ export async function POST(request: Request) {
 
     const intent = payload.intent;
     const signature = payload.signature;
+    const skipClaimRequested = payload.skipClaim === true;
+    const skipClaimAllowed =
+      skipClaimRequested &&
+      process.env.NODE_ENV !== "production" &&
+      env.MAINNET_ENABLED !== true &&
+      chain.chainId !== 1;
+    const skipClaim = skipClaimAllowed && skipClaimRequested;
 
     if (!intent) {
       if (payload.intentId || payload.merchantOrderId) {
@@ -311,7 +319,7 @@ export async function POST(request: Request) {
       const claimDetails = resolveClaimCode(existing);
       const persisted = await persistClaimCode(existing, claimDetails);
       const mintResponse = resolveMintResponse(persisted, buyerChecksumForMessage);
-      if (persisted.buyerAddress) {
+      if (!skipClaim && persisted.buyerAddress) {
         await maybeMarkClaimed(persisted, persisted.buyerAddress);
       }
       if (debugEnabled) {
@@ -470,6 +478,7 @@ export async function POST(request: Request) {
     }
 
     let mintedTokenId: string | null = null;
+    let tokenIdWarning: string | null = null;
     try {
       const publicClient = createPublicClient({ transport: http(RPC_URL) });
       const receipt = await publicClient.waitForTransactionReceipt({ hash: onchain.txHash });
@@ -485,10 +494,7 @@ export async function POST(request: Request) {
       return errorResponse("onchain_error", err.message || "Failed to parse mint receipt", 500);
     }
     if (!mintedTokenId) {
-      if (lockKey) {
-        await kv.del(lockKey).catch(() => {});
-      }
-      return errorResponse("onchain_error", "Mint event not found in receipt", 500);
+      tokenIdWarning = "could_not_extract_tokenid_from_receipt";
     }
 
     const claimDetails = resolveClaimCode(existing);
@@ -518,12 +524,12 @@ export async function POST(request: Request) {
       claimCode: claimDetails.claimCode,
       claimCodeCreatedAt: claimDetails.claimCodeCreatedAt,
       claimCodeHash: claimDetails.claimCodeHash,
-      claimStatus: mintMode === "direct" ? "claimed" : "unclaimed",
-      claimedTo: mintMode === "direct" ? buyerChecksumForMessage : null,
-      claimedAt: mintMode === "direct" ? now : null,
+      claimStatus: skipClaim ? "unclaimed" : mintMode === "direct" ? "claimed" : "unclaimed",
+      claimedTo: skipClaim ? null : mintMode === "direct" ? buyerChecksumForMessage : null,
+      claimedAt: skipClaim ? null : mintMode === "direct" ? now : null,
     });
 
-    if (paidResult.order.buyerAddress) {
+    if (!skipClaim && paidResult.order.buyerAddress) {
       await maybeMarkClaimed(paidResult.order, paidResult.order.buyerAddress);
     }
 
@@ -546,10 +552,15 @@ export async function POST(request: Request) {
       ok: true,
       status: "processed",
       txHash: onchain.txHash,
+      tokenId: mintedTokenId,
+      ...(tokenIdWarning ? { tokenIdWarning } : {}),
+      verifyingContract: onchain.nftAddress,
+      chainId: chain.chainId,
       paymentIntentId,
       orderId,
       claimCode: claimDetails.claimCode,
       claimRequired: mintMode === "custody",
+      ...(skipClaim ? { claimed: false } : {}),
       mintedTo,
       mintMode,
       ...(debugEnabled ? { existingHadTxHash: false, lockHit: false } : {}),

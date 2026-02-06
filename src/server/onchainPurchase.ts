@@ -7,6 +7,7 @@ import { eventTicketAbi } from "@/src/contracts/eventTicket.abi";
 import { requireEnv, validateServerEnv } from "@/src/server/env";
 import { logger } from "@/src/lib/logger";
 import { getChainConfig } from "@/src/lib/chain";
+import { checkRelayerGasBalance } from "@/src/lib/gasCheck";
 
 const RPC_URL = getChainConfig().rpcUrl;
 
@@ -94,6 +95,9 @@ export async function purchaseOnchain({
   if (process.env.NODE_ENV !== "production") {
     logger.info("onchain.backend", { backend: backendAccount.address, contract: nftAddress });
   }
+
+  await checkRelayerGasBalance(privateKeyRaw);
+
   const publicClient = createPublicClient({ transport: http(RPC_URL) });
   const walletClient = createWalletClient({ account: backendAccount, transport: http(RPC_URL) });
   const normalizedEventId = normalizeEventId(eventId);

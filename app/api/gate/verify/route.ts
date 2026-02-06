@@ -15,6 +15,8 @@ import { emitMetric } from "@/src/lib/metrics";
 import { getChainConfig } from "@/src/lib/chain";
 import { logger } from "@/src/lib/logger";
 import { applyAtLeastTransition, applyTransition, ensureTicketState } from "@/src/lib/ticketLifecycle";
+import { verifyOperatorKey } from "@/src/lib/operatorKeys";
+import { deriveOperatorKeyId, logAudit } from "@/src/lib/auditLog";
 
 const verifyLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
 const verifyTokenLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
@@ -29,8 +31,38 @@ const INVALID_CODE_LOCK_MINUTES = 10;
 const INVALID_CODE_WINDOW_SECONDS = 15 * 60;
 const GATE_LOCK_TTL_SECONDS = 10;
 const hasKv = Boolean(env.KV_REST_API_URL && env.KV_REST_API_TOKEN);
+const gateVerifyRateState = new Map<string, { count: number; resetAt: number }>();
+
+function getGateVerifyRateConfig() {
+  const windowSecRaw = process.env.GATE_VERIFY_RL_WINDOW_SEC;
+  const maxRaw = process.env.GATE_VERIFY_RL_MAX;
+  const windowSec = Math.max(1, Number(windowSecRaw ?? 60));
+  const max = Math.max(1, Number(maxRaw ?? 60));
+  return {
+    windowMs: windowSec * 1000,
+    max,
+  };
+}
+
+function checkGateVerifyRateLimit(ip: string): { ok: true } | { ok: false; retryAfterSec: number } {
+  const { windowMs, max } = getGateVerifyRateConfig();
+  const now = Date.now();
+  const entry = gateVerifyRateState.get(ip);
+  if (!entry || now >= entry.resetAt) {
+    gateVerifyRateState.set(ip, { count: 1, resetAt: now + windowMs });
+    return { ok: true };
+  }
+  if (entry.count >= max) {
+    const retryAfterSec = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+    return { ok: false, retryAfterSec };
+  }
+  entry.count += 1;
+  return { ok: true };
+}
 
 type VerifyPayload = {
+  operatorKey?: string;
+  eventId?: string | number;
   tokenId?: string | number;
   code?: string;
   merchantOrderId?: string;
@@ -39,7 +71,9 @@ type VerifyPayload = {
 type VerifyErrorReason =
   | "rate_limited"
   | "invalid_json"
+  | "missing_operator_key"
   | "invalid_token"
+  | "event_mismatch"
   | "missing_code"
   | "order_not_found"
   | "temporarily_locked"
@@ -49,7 +83,8 @@ type VerifyErrorReason =
   | "invalid_code"
   | "payment_mismatch"
   | "not_owner"
-  | "already_used";
+  | "already_used"
+  | "invalid_operator_key";
 
 function getClientIp(headers: Headers): string {
   const forwarded = headers.get("x-forwarded-for");
@@ -59,6 +94,17 @@ function getClientIp(headers: Headers): string {
 
 function hashIp(ip: string): string {
   return crypto.createHash("sha256").update(ip).digest("hex");
+}
+
+function hashUa(ua: string | null): string | null {
+  if (!ua) return null;
+  const trimmed = ua.trim();
+  if (!trimmed) return null;
+  return crypto.createHash("sha256").update(trimmed).digest("hex");
+}
+
+function createRequestId(): string {
+  return crypto.randomBytes(6).toString("hex");
 }
 
 function logGateFailure(reason: VerifyErrorReason, tokenId: string, eventId: string | null, ipHash: string) {
@@ -104,6 +150,7 @@ function respondFailure({
   details?: string;
   debugExtras?: Record<string, unknown>;
 }) {
+  const allowDetails = !(env.MAINNET_ENABLED || CHAIN_ID === 1);
   return jsonNoStore(
     {
       ok,
@@ -114,7 +161,7 @@ function respondFailure({
       ...(debugEnabled ? { eventId } : {}),
       ...(typeof owner === "string" ? { owner } : {}),
       ...(typeof claimed === "boolean" ? { claimed } : {}),
-      ...(details ? { details } : {}),
+      ...(details && allowDetails ? { details } : {}),
       ...(debugEnabled && debugExtras ? debugExtras : {}),
     },
     { status }
@@ -134,6 +181,10 @@ function parseTokenId(value: unknown): bigint | null {
     }
   }
   return null;
+}
+
+function parseEventId(value: unknown): bigint | null {
+  return parseTokenId(value);
 }
 
 function normalizeCode(value: unknown): string | null {
@@ -156,29 +207,46 @@ export async function POST(request: Request) {
   const route = "/api/gate/verify";
   const startedAt = Date.now();
   let gateLockKey: string | null = null;
+  const requestId = createRequestId();
   const ip = getClientIp(request.headers);
   const ipHash = hashIp(ip);
+  const uaHash = hashUa(request.headers.get("user-agent"));
+  const rateCheck = checkGateVerifyRateLimit(ip);
+  if (!rateCheck.ok) {
+    logAudit({
+      route: "gate_verify",
+      reason: "rate_limited",
+      operatorKeyId: "unknown",
+      eventId: null,
+      tokenId: "unknown",
+      ipHash,
+      uaHash,
+      requestId,
+    });
+    return jsonNoStore(
+      { ok: false, reason: "rate_limited", retryAfterSec: rateCheck.retryAfterSec },
+      { status: 429 }
+    );
+  }
 
   try {
     if (env.VERCEL_ENV === "production" && !env.FEATURE_TICKETING_ENABLED) {
       return jsonNoStore({ ok: false, valid: false, reason: "disabled", chainId: CHAIN_ID }, { status: 503 });
     }
 
-    if (env.VERCEL_ENV === "production") {
-      const operatorKey = env.GATE_OPERATOR_KEY ?? "";
-      const headerKey = request.headers.get("x-operator-key") ?? "";
-      if (!operatorKey || headerKey !== operatorKey) {
-        emitMetric(
-          "gate_invalid",
-          { route, ip, reason: "unauthorized", latencyMs: Date.now() - startedAt }
-        );
-        return jsonNoStore({ ok: false, valid: false, reason: "unauthorized", chainId: CHAIN_ID }, { status: 401 });
-      }
-    }
-
     const rate = verifyLimiter(`${route}:${ip}`);
     if (!rate.ok) {
       const retryAfter = Math.ceil(rate.retryAfterMs / 1000);
+      logAudit({
+        route: "gate_verify",
+        reason: "rate_limited",
+        operatorKeyId: "unknown",
+        eventId: null,
+        tokenId: "unknown",
+        ipHash,
+        uaHash,
+        requestId,
+      });
       logGateFailure("rate_limited", "unknown", null, ipHash);
       emitMetric(
         "rate_limit_hit",
@@ -220,6 +288,53 @@ export async function POST(request: Request) {
       });
     }
 
+    const operatorKey = typeof payload?.operatorKey === "string" ? payload.operatorKey : null;
+    if (!operatorKey || !operatorKey.trim()) {
+      verifyOperatorKey(operatorKey, { ipHash });
+      logAudit({
+        route: "gate_verify",
+        reason: "missing_operator_key",
+        operatorKeyId: "unknown",
+        eventId: null,
+        tokenId: "unknown",
+        ipHash,
+        uaHash,
+        requestId,
+      });
+      logGateFailure("missing_operator_key", "unknown", null, ipHash);
+      emitMetric(
+        "gate_invalid",
+        { route, ip, reason: "missing_operator_key", latencyMs: Date.now() - startedAt }
+      );
+      return jsonNoStore(
+        { ok: false, valid: false, reason: "missing_operator_key", chainId: CHAIN_ID },
+        { status: 401 }
+      );
+    }
+
+    const keyCheck = verifyOperatorKey(operatorKey, { ipHash });
+    if (!keyCheck.ok) {
+      logAudit({
+        route: "gate_verify",
+        reason: "invalid_operator_key",
+        operatorKeyId: deriveOperatorKeyId(operatorKey),
+        eventId: null,
+        tokenId: "unknown",
+        ipHash,
+        uaHash,
+        requestId,
+      });
+      logGateFailure("invalid_operator_key", "unknown", null, ipHash);
+      emitMetric(
+        "gate_invalid",
+        { route, ip, reason: "invalid_operator_key", latencyMs: Date.now() - startedAt }
+      );
+      return jsonNoStore(
+        { ok: false, valid: false, reason: "invalid_operator_key", chainId: CHAIN_ID },
+        { status: 401 }
+      );
+    }
+
     const tokenId = parseTokenId(payload?.tokenId);
     if (tokenId === null) {
       logGateFailure("invalid_token", "unknown", null, ipHash);
@@ -241,9 +356,51 @@ export async function POST(request: Request) {
     }
 
     const tokenIdString = tokenId.toString();
+    const operatorKeyId = deriveOperatorKeyId(operatorKey);
+    const inputEventId = parseEventId(payload?.eventId);
+    if (inputEventId === null) {
+      logAudit({
+        route: "gate_verify",
+        reason: "invalid_token",
+        operatorKeyId,
+        eventId: null,
+        tokenId: tokenIdString,
+        ipHash,
+        uaHash,
+        requestId,
+      });
+      logGateFailure("invalid_token", tokenIdString, null, ipHash);
+      emitMetric("gate_invalid", {
+        route,
+        tokenId: tokenIdString,
+        ip,
+        reason: "invalid_event",
+        latencyMs: Date.now() - startedAt,
+      });
+      return respondFailure({
+        ok: false,
+        reason: "invalid_token",
+        status: 400,
+        tokenId: tokenIdString,
+        eventId: null,
+        details: "Invalid eventId",
+      });
+    }
+
+    const inputEventIdString = inputEventId.toString();
     const tokenRate = verifyTokenLimiter(`${route}:${ip}:${tokenIdString}`);
     if (!tokenRate.ok) {
       const retryAfter = Math.ceil(tokenRate.retryAfterMs / 1000);
+      logAudit({
+        route: "gate_verify",
+        reason: "rate_limited",
+        operatorKeyId,
+        eventId: inputEventIdString,
+        tokenId: tokenIdString,
+        ipHash,
+        uaHash,
+        requestId,
+      });
       logGateFailure("rate_limited", tokenIdString, null, ipHash);
       emitMetric(
         "rate_limit_hit",
@@ -263,6 +420,16 @@ export async function POST(request: Request) {
     }
     const code = normalizeCode(payload?.code);
     if (!code) {
+      logAudit({
+        route: "gate_verify",
+        reason: "missing_code",
+        operatorKeyId,
+        eventId: inputEventIdString,
+        tokenId: tokenIdString,
+        ipHash,
+        uaHash,
+        requestId,
+      });
       logGateFailure("missing_code", tokenIdString, null, ipHash);
       emitMetric("gate_invalid", {
         route,
@@ -285,6 +452,16 @@ export async function POST(request: Request) {
       const lockKey = `gate:verify:lock:${tokenIdString}`;
       const locked = await kv.get<string>(lockKey);
       if (locked) {
+        logAudit({
+          route: "gate_verify",
+          reason: "temporarily_locked",
+          operatorKeyId,
+          eventId: inputEventIdString,
+          tokenId: tokenIdString,
+          ipHash,
+          uaHash,
+          requestId,
+        });
         logGateFailure("temporarily_locked", tokenIdString, null, ipHash);
         emitMetric(
           "lock_hit",
@@ -303,6 +480,16 @@ export async function POST(request: Request) {
       gateLockKey = `gate:lock:${tokenIdString}`;
       const gateLocked = await kv.set(gateLockKey, "1", { nx: true, ex: GATE_LOCK_TTL_SECONDS });
       if (!gateLocked) {
+        logAudit({
+          route: "gate_verify",
+          reason: "temporarily_locked",
+          operatorKeyId,
+          eventId: inputEventIdString,
+          tokenId: tokenIdString,
+          ipHash,
+          uaHash,
+          requestId,
+        });
         logGateFailure("temporarily_locked", tokenIdString, null, ipHash);
         emitMetric(
           "lock_hit",
@@ -360,7 +547,7 @@ export async function POST(request: Request) {
           abi: eventTicketAbi,
           functionName: "tickets",
           args: [tokenId],
-        }) as Promise<readonly [bigint, boolean]>,
+        }) as Promise<readonly [bigint, boolean, `0x${string}`, `0x${string}`, number, number]>,
         client.readContract({
           address: contractAddress,
           abi: eventTicketAbi,
@@ -390,6 +577,34 @@ export async function POST(request: Request) {
         tokenId: tokenIdString,
         eventId: null,
         details: message,
+      });
+    }
+
+    if (eventId !== inputEventIdString) {
+      logAudit({
+        route: "gate_verify",
+        reason: "event_mismatch",
+        operatorKeyId,
+        eventId,
+        tokenId: tokenIdString,
+        ipHash,
+        uaHash,
+        requestId,
+      });
+      logGateFailure("event_mismatch", tokenIdString, eventId, ipHash);
+      emitMetric(
+        "gate_invalid",
+        { route, tokenId: tokenIdString, ip, reason: "event_mismatch", latencyMs: Date.now() - startedAt }
+      );
+      return respondFailure({
+        ok: false,
+        reason: "event_mismatch",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId,
+        owner,
+        claimed: onchainClaimed,
+        details: "EventId does not match token",
       });
     }
 
@@ -471,6 +686,16 @@ export async function POST(request: Request) {
     const paymentMatches = expectedHash === normalizedOnchain;
 
     if ((order.claimCode || order.claimCodeHash) && !codeMatches) {
+      logAudit({
+        route: "gate_verify",
+        reason: "invalid_code",
+        operatorKeyId,
+        eventId,
+        tokenId: tokenIdString,
+        ipHash,
+        uaHash,
+        requestId,
+      });
       logGateFailure("invalid_code", tokenIdString, eventId, ipHash);
       emitMetric(
         "gate_invalid",
@@ -490,6 +715,16 @@ export async function POST(request: Request) {
     }
 
     if (!order.claimCode && !order.claimCodeHash && !paymentMatches) {
+      logAudit({
+        route: "gate_verify",
+        reason: "payment_mismatch",
+        operatorKeyId,
+        eventId,
+        tokenId: tokenIdString,
+        ipHash,
+        uaHash,
+        requestId,
+      });
       logGateFailure("payment_mismatch", tokenIdString, eventId, ipHash);
       if (hasKv) {
         const invalidKey = `gate:verify:invalid:${tokenIdString}`;
@@ -520,6 +755,43 @@ export async function POST(request: Request) {
       });
     }
 
+    const responseClaimed =
+      onchainClaimed === true ||
+      order.claimStatus === "claimed" ||
+      order.ticketState === "claimed" ||
+      order.ticketState === "gate_validated";
+    if (!responseClaimed) {
+      logAudit({
+        route: "gate_verify",
+        reason: "not_claimed",
+        operatorKeyId,
+        eventId,
+        tokenId: tokenIdString,
+        ipHash,
+        uaHash,
+        requestId,
+      });
+      logGateFailure("not_claimed", tokenIdString, eventId, ipHash);
+      emitMetric("gate_invalid", {
+        route,
+        tokenId: tokenIdString,
+        ip,
+        reason: "not_claimed",
+        latencyMs: Date.now() - startedAt,
+      });
+      return respondFailure({
+        ok: true,
+        reason: "not_claimed",
+        status: 200,
+        tokenId: tokenIdString,
+        eventId,
+        owner,
+        claimed: false,
+        details: "Ticket not claimed",
+        debugExtras: debugEnabled ? { paymentIdOnchain } : undefined,
+      });
+    }
+
     if (!onchainClaimed) {
       let buyerAddress: string | null = null;
       if (order.buyerAddress) {
@@ -542,6 +814,16 @@ export async function POST(request: Request) {
         await persistOrder(updated);
         order = updated;
       } else {
+        logAudit({
+          route: "gate_verify",
+          reason: "not_claimed",
+          operatorKeyId,
+          eventId,
+          tokenId: tokenIdString,
+          ipHash,
+          uaHash,
+          requestId,
+        });
         logGateFailure("not_claimed", tokenIdString, eventId, ipHash);
         emitMetric("gate_invalid", {
           route,
@@ -585,13 +867,21 @@ export async function POST(request: Request) {
       }
     }
 
-    const responseClaimed =
-      order.claimStatus === "claimed" || order.ticketState === "claimed" || order.ticketState === "gate_validated";
     const claimedToStored: string | null = order.claimedTo ?? null;
     const claimedToOnchain: string | null = owner ?? null;
     let claimedToMismatchHealed = false;
 
     if (order.ticketState === "gate_validated") {
+      logAudit({
+        route: "gate_verify",
+        reason: "already_used",
+        operatorKeyId,
+        eventId,
+        tokenId: tokenIdString,
+        ipHash,
+        uaHash,
+        requestId,
+      });
       logGateFailure("already_used", tokenIdString, eventId, ipHash);
       emitMetric(
         "gate_invalid",
@@ -611,6 +901,16 @@ export async function POST(request: Request) {
     }
 
     if (order.ticketState !== "claimed") {
+      logAudit({
+        route: "gate_verify",
+        reason: "not_claimed",
+        operatorKeyId,
+        eventId,
+        tokenId: tokenIdString,
+        ipHash,
+        uaHash,
+        requestId,
+      });
       logGateFailure("not_claimed", tokenIdString, eventId, ipHash);
       emitMetric("gate_invalid", {
         route,
@@ -652,6 +952,16 @@ export async function POST(request: Request) {
               // best-effort sync only
             }
           } else {
+            logAudit({
+              route: "gate_verify",
+              reason: "not_owner",
+              operatorKeyId,
+              eventId,
+              tokenId: tokenIdString,
+              ipHash,
+              uaHash,
+              requestId,
+            });
             logGateFailure("not_owner", tokenIdString, eventId, ipHash);
             emitMetric("gate_invalid", {
               route,
@@ -694,6 +1004,16 @@ export async function POST(request: Request) {
         claimedAt: order.claimedAt ?? useResult.usedAt,
       });
       await persistOrder(updated);
+      logAudit({
+        route: "gate_verify",
+        reason: "already_used",
+        operatorKeyId,
+        eventId,
+        tokenId: tokenIdString,
+        ipHash,
+        uaHash,
+        requestId,
+      });
       logGateFailure("already_used", tokenIdString, eventId, ipHash);
       emitMetric(
         "gate_invalid",
@@ -724,6 +1044,16 @@ export async function POST(request: Request) {
     });
     await persistOrder(updatedOrder);
 
+    logAudit({
+      route: "gate_verify",
+      reason: "valid",
+      operatorKeyId,
+      eventId,
+      tokenId: tokenIdString,
+      ipHash,
+      uaHash,
+      requestId,
+    });
     logGateSuccess(tokenIdString, eventId, ipHash);
 
     emitMetric(

@@ -1,92 +1,87 @@
-# Ticket Lifecycle
+# Bilet Yaşam Döngüsü — Etkinlik & Konser
 
-This document defines the single source of truth for ticket lifecycle states and how API endpoints may transition them.
+## Overview
+- Platformun amacı: biletin satın alma, doğrulama ve giriş akışını güvenli ve hızlı yönetmek.
+- Altyapı merkeziyetsiz doğrulama sağlar, fakat kullanıcı deneyimi sade ve tek adımlıdır.
 
-## State definitions
-- `intent_created`: An order intent exists; no confirmed payment.
-- `paid`: Payment confirmed, but token not yet minted.
-- `minted`: Token minted (custody or buyer), but not yet claimed by buyer in lifecycle.
-- `claimable`: Token is ready to be claimed by buyer (custody holds the token).
-- `claimed`: Buyer owns the token.
-- `gate_validated`: Ticket has been accepted at the gate; terminal state.
+## A) Satın Alma / Mint (Invisible Claim default)
+1. Kullanıcı ödeme yapar (fiat/crypto).
+2. Backend bir `TicketIntent` oluşturur.
+3. İmza alınır (kullanıcı veya relayer).
+4. Smart contract:
+   - NFT mint eder.
+   - `eventId` on-chain yazılır.
+5. Sistem üretir:
+   - `tokenId`, `orderId`.
+6. **Invisible claim**:
+   - Varsayılan akışta sistem otomatik claim eder.
+   - Kullanıcıdan ekstra adım istenmez.
 
-## Allowed transitions
-| From | To |
-| --- | --- |
-| `intent_created` | `paid`, `minted` |
-| `paid` | `minted`, `claimable` |
-| `minted` | `claimable`, `claimed` |
-| `claimable` | `claimed` |
-| `claimed` | `gate_validated` |
-| `gate_validated` | _(terminal)_ |
+## B) Claim (Opsiyonel / Edge-case)
+- **Ne zaman gerekir:**
+  - Transfer/secondary market
+  - Email ile gönderim
+  - Gecikmeli aktivasyon
+- **Not:** Default UX’te kapalıdır.
 
-Same-state transitions are always permitted for idempotency.
+## C) Gate Verify (Giriş Kontrolü)
+- Operator, Gate ekranından girer:
+  - Operator key
+  - EventId + TokenId (+ opsiyonel claim code)
+- **Kontrol sırası:**
+  1. Operator key
+  2. Rate limit
+  3. Temporary lock
+  4. Event match
+  5. Claimed durumu
+  6. Already used
+- **Sonuçlar:**
+  - `valid` → giriş onaylanır
+  - Diğerleri → net sebep ile reddedilir
 
-## Mint modes
-Minting behavior is controlled by `MINT_MODE` (server env).
+## D) Kullanım Sonrası
+- `used=true`
+- Tekrar giriş mümkün değil
+- Tüm denemeler audit log’a düşer
 
-- `direct` (default): tickets are minted directly to the buyer’s wallet. Claim is not required.
-- `custody`: tickets are minted to a custody wallet and require a claim transfer to the buyer.
+## Security & Trust
+- On-chain doğrulama
+- Replay/abuse korumaları
+- Audit logs (dev-only viewer; prod kapalı)
 
-Required envs:
-- `MINT_MODE`: `"direct"` or `"custody"` (defaults to `"direct"` if missing).
-- `CUSTODY_WALLET_ADDRESS`: required only when `MINT_MODE="custody"`.
+## FAQ (Short)
+- **“Claim neden görünmez?”**
+  - Kullanıcı deneyimini sade tutmak için varsayılan akışta sistem otomatik claim eder.
+- **“Biletimi transfer edersem?”**
+  - Transfer/secondary market senaryosunda claim opsiyonel olarak devreye girer.
+- **“Gate’te neden reddedildi?”**
+  - Operator key, event eşleşmesi, claimed durumu veya used kontrolünden biri başarısız olmuştur.
 
-Claim requirement:
-- Direct mint → `/api/tickets/claim` returns `status="not_required"` and `claimed=true`.
-- Custody mint → `/api/tickets/claim` requires `merchantOrderId`, `claimCode`, and `walletAddress`.
-  - The claim endpoint transfers the NFT from custody to the buyer.
-  - `CUSTODY_WALLET_PRIVATE_KEY` is required only when an onchain custody transfer is actually needed (after owner checks).
+---
 
-## Endpoint mapping
-- `/api/tickets/intent`: creates/updates order as `intent_created` (never downgrades).
-- `/api/tickets/purchase`:
-  - success with txHash → `minted` (and implicitly `paid`).
-  - if minted directly to the buyer, lifecycle transitions to `claimed` automatically.
-  - success responses include `claimCode` for subsequent `/api/tickets/claim`.
-  - pending → no state change, `purchaseStatus="pending"`.
-  - duplicate → no state change.
-  - signature is required here (intent is unsigned).
-- `/api/tickets/claim`:
-  - allowed from `minted` or `claimable`.
-  - success → `claimed`.
-  - already claimed → no state change.
-- `/api/gate/verify`:
-  - valid scan only from `claimed`.
-  - success → `gate_validated` and write used marker.
-  - already used → no state change.
-  - when a ticket is minted directly to the buyer, a valid gate scan can auto-claim the order before validation.
-  - on a valid scan, order is persisted as `gate_validated` with `claimStatus="claimed"`.
+# PDF DRAFT — Bilet Yaşam Döngüsü (Etkinlik & Konser)
 
-## Idempotency rules
-- Repeated calls must not regress state.
-- Duplicate purchase with existing txHash must not change state.
-- Claim and gate verify are safe to retry and must return stable results.
-- `gate_validated` is terminal.
+## Overview
+Platformun amacı, biletin satın alma, doğrulama ve giriş akışını güvenli ve hızlı yönetmektir. Altyapı merkeziyetsiz doğrulama sağlar, ancak kullanıcıya sade ve tek adımlı bir deneyim sunar.
 
-## KV keys
-- Orders:
-  - `order:<merchantOrderId>`
-  - `order:token:<tokenId>`
-- Locks (unchanged):
-  - `purchase:lock:<merchantOrderId>`
-  - `claim:lock:<tokenId|merchantOrderId>`
-  - `gate:lock:<tokenId>`
-- Used markers (event-scoped):
-  - `used:event:<eventId>:token:<tokenId>`
-  - Backward compatibility: if `used:token:<tokenId>` exists, treat as already used and write the event-scoped key.
+## A) Satın Alma / Mint (Invisible Claim default)
+Kullanıcı ödeme yapar (fiat/crypto). Backend bir `TicketIntent` oluşturur ve imza alınır (kullanıcı veya relayer). Smart contract NFT mint eder ve `eventId` on-chain yazılır. Sistem `tokenId` ve `orderId` üretir. Varsayılan akışta **invisible claim** otomatik çalışır; kullanıcıdan ekstra adım istenmez.
 
-## Examples
-### Happy path
-1. Intent → `intent_created`
-2. Purchase success → `minted`
-3. Claim success → `claimed`
-4. Gate verify success → `gate_validated`
+## B) Claim (Opsiyonel / Edge-case)
+Claim yalnızca opsiyonel/edge-case senaryolarda gerekir: transfer/secondary market, email ile gönderim veya gecikmeli aktivasyon. Default UX’te kapalıdır.
 
-### Duplicate purchase
-1. Purchase success → `minted` (txHash stored)
-2. Repeat purchase → `duplicate`, state remains `minted`
+## C) Gate Verify (Giriş Kontrolü)
+Operator Gate ekranında operator key ve eventId + tokenId girer (opsiyonel claim code dahil edilebilir). Kontrol sırası: operator key, rate limit, temporary lock, event match, claimed durumu, already used. Sonuç `valid` ise giriş onaylanır; diğer durumlarda net bir gerekçe ile reddedilir.
 
-### Repeated gate scan
-1. Gate verify success → `gate_validated`
-2. Repeat scan → `already_used`, state remains `gate_validated`
+## D) Kullanım Sonrası
+Bilet `used=true` olur ve tekrar giriş mümkün değildir. Tüm denemeler audit log’a kaydedilir.
+
+## Security & Trust
+On-chain doğrulama kullanılır. Replay/abuse korumaları aktiftir. Audit logs yalnızca dev viewer’da görünür; prod ortamında kapalıdır.
+
+## FAQ (Short)
+**Claim neden görünmez?** Varsayılan akışta sistem otomatik claim eder ve kullanıcıdan ekstra adım istenmez.
+
+**Biletimi transfer edersem?** Transfer/secondary market senaryosunda claim opsiyonel olarak devreye girer.
+
+**Gate’te neden reddedildi?** Operator key, event eşleşmesi, claimed durumu veya used kontrolünden biri başarısız olmuştur.

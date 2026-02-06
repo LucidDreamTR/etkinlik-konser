@@ -108,7 +108,7 @@ async function resolveOnchainTicket(tokenId: bigint) {
       abi: eventTicketAbi,
       functionName: "tickets",
       args: [tokenId],
-    }) as Promise<readonly [bigint, boolean]>,
+    }) as Promise<readonly [bigint, boolean, Hex, Address, number, number]>,
     client.readContract({
       address: contractAddress,
       abi: eventTicketAbi,
@@ -195,7 +195,7 @@ export async function GET(
           abi: eventTicketAbi,
           functionName: "tickets",
           args: [tokenId],
-        }) as Promise<readonly [bigint, boolean]>,
+        }) as Promise<readonly [bigint, boolean, Hex, Address, number, number]>,
         client.readContract({
           address: contractAddressUsed,
           abi: eventTicketAbi,

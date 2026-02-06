@@ -15,6 +15,7 @@ import { logger } from "@/src/lib/logger";
 import { isProdDebugEnabled } from "@/src/lib/debug";
 import { hashPaymentPreimage } from "@/src/lib/paymentHash";
 import { resolveMintModeFromOrder } from "@/src/lib/mintMode";
+import { checkRelayerGasBalance } from "@/src/lib/gasCheck";
 
 const env = getServerEnv();
 const chain = getChainConfig();
@@ -425,6 +426,8 @@ export async function POST(request: Request) {
     }
     return jsonNoStore({ ok: false, reason: "server_misconfigured", error: "Server misconfigured" }, { status: 500 });
   }
+
+  await checkRelayerGasBalance(custodyKeyRaw);
 
   try {
     const contract = new Contract(getAddress(nftAddress), eventTicketClaimAbi, signer);
